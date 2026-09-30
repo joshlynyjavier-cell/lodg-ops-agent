@@ -166,32 +166,51 @@ def procedure_first(category_match):
     return "Follow the escalation procedure above. " if category_match.is_safety_critical else ""
 
 
-def emergency_flags(age, last_progress, now, config, category_match):
+def dispatch_step(category_match):
+    """How to get someone assigned when no vendor is recorded."""
+    if category_match.vendor:
+        return f"Assign {category_match.vendor} and get confirmation of dispatch."
+    return "Assign an appropriate vendor once a supervisor has reviewed the issue."
+
+
+def emergency_flags(age, last_progress, now, config, category_match, vendor):
     """Stage checks for an unresolved Emergency: response, then active work,
-    then long-running review. Dispatch is checked separately."""
+    then long-running review. Dispatch is checked separately. Actions only
+    mention contacting a vendor when one is actually assigned."""
     first = procedure_first(category_match)
     if last_progress is None:
         if age > config.emergency_response:
+            if vendor:
+                action = (f"Call {vendor} for an arrival time; escalate to the property manager "
+                          "if no one is on the way.")
+            else:
+                action = ("No vendor is assigned, so no one is on the way. Escalate to the property "
+                          "manager now. " + dispatch_step(category_match))
             return [Flag("NO_RESPONSE", "critical",
                          f"No progress recorded {fmt_duration(age)} after the request "
-                         f"(limit {fmt_duration(config.emergency_response)}).",
-                         first + "Call the assigned vendor or on-call technician for an arrival time; "
-                         "escalate to the property manager if no one is on the way.")]
+                         f"(limit {fmt_duration(config.emergency_response)}).", first + action)]
         return []
     idle = now - last_progress
     if idle > config.emergency_stalled_after:
+        if vendor:
+            action = f"Contact {vendor} for a status and next step; escalate to the property manager if work has stopped."
+        else:
+            action = ("No vendor is assigned. Escalate to the property manager and find out who did the "
+                      "earlier work. " + dispatch_step(category_match))
         return [Flag("STALLED_PROGRESS", "high",
                      f"Last progress {fmt_duration(idle)} ago (limit {fmt_duration(config.emergency_stalled_after)}); "
-                     f"emergency unresolved for {fmt_duration(age)}.",
-                     first + "Contact the vendor for a status and next step; escalate to the property "
-                     "manager if work has stopped.")]
+                     f"emergency unresolved for {fmt_duration(age)}.", first + action)]
     if age > config.emergency_long_running_review:
+        if vendor:
+            action = (f"Review the repair timeline with {vendor} and decide whether the resident "
+                      "needs temporary arrangements.")
+        else:
+            action = ("No vendor is recorded although work is in progress. Confirm who is doing the work, "
+                      "then review the timeline and whether the resident needs temporary arrangements.")
         return [Flag("LONG_RUNNING_EMERGENCY", "medium",
                      f"Work is active (last progress {fmt_duration(idle)} ago) but the emergency is "
                      f"unresolved after {fmt_duration(age)} (review after "
-                     f"{fmt_duration(config.emergency_long_running_review)}).",
-                     "Review the repair timeline with the vendor and decide whether the resident "
-                     "needs temporary arrangements.")]
+                     f"{fmt_duration(config.emergency_long_running_review)}).", action)]
     return []
 
 
@@ -286,17 +305,14 @@ def evaluate(row, now, config, categories):
             action = f"Call {vendor} to confirm dispatch; line up a backup vendor if they can't respond."
         else:
             detail = f"No vendor assigned; {priority} request open {fmt_duration(age)}."
-            if category_match.vendor:
-                action = f"Assign {category_match.vendor} and get confirmation of dispatch."
-            else:
-                action = "Assign an appropriate vendor once a supervisor has reviewed the issue."
+            action = dispatch_step(category_match)
         flags.append(Flag("NO_CONFIRMED_DISPATCH", severity, detail, procedure_first(category_match) + action))
 
     # Emergencies are checked by stage (response, active work, long-running);
     # an emergency with a confirmed vendor actively working is not treated
     # like an untouched one.
     if priority == "Emergency" and age is not None:
-        flags.extend(emergency_flags(age, last_progress, now, config, category_match))
+        flags.extend(emergency_flags(age, last_progress, now, config, category_match, vendor))
 
     # Resolution time limit for other priorities. A future appointment pauses
     # the clock for Medium and Low requests only.
@@ -308,7 +324,11 @@ def evaluate(row, now, config, categories):
             if age > limit * config.resolution_multiplier:
                 severity = escalate(severity)
             detail = f"{priority} request unresolved for {fmt_duration(age)} (limit {fmt_duration(limit)})."
-            action = "Get a status from the vendor and set a completion date; escalate if it is stuck."
+            if vendor:
+                action = f"Get a status from {vendor} and set a completion date; escalate if it is stuck."
+            else:
+                action = (f"No vendor has been assigned in {fmt_duration(age)}. Escalate to the property manager. "
+                          + dispatch_step(category_match))
             if scheduled is not None and scheduled <= now:
                 detail += f" Scheduled visit on {scheduled:%Y-%m-%d %H:%M} has passed."
                 action = "Confirm whether the scheduled visit happened, and reschedule if it didn't."
@@ -415,8 +435,11 @@ PROTOTYPE_NOTICE = ("PROTOTYPE: escalation procedures are examples only and must
                     "before real-world use.")
 
 
-def category_lines(category_match):
-    """Report lines describing how the issue's category says to handle it."""
+def category_lines(category_match, priority):
+    """Report lines describing how the issue's category says to handle it.
+    A routine standard action is withheld when the assigned priority is above
+    the category's usual maximum: the assigned priority is respected until a
+    person changes it, and the mismatch is flagged for review instead."""
     lines = []
     if not category_match.categories:
         lines.append("  Category: not recognized - needs human review")
@@ -427,7 +450,12 @@ def category_lines(category_match):
             lines.append("  Escalation procedure (PROTOTYPE EXAMPLE - not approved for real-world use):")
             lines.extend(f"    - {step}" for step in c.procedure)
         if c.standard_action:
-            lines.append(f"  Standard action: {c.standard_action}")
+            if c.max_priority and priority in PRIORITIES and \
+                    PRIORITIES.index(priority) > PRIORITIES.index(c.max_priority):
+                lines.append(f"  Standard action: not shown - the routine {c.label} action conflicts with the "
+                             f"assigned {priority} priority. See the priority-mismatch flag.")
+            else:
+                lines.append(f"  Standard action: {c.standard_action}")
     if category_match.also_matched:
         lines.append("  Also mentions: " + ", ".join(c.label for c in category_match.also_matched))
     return lines
@@ -452,7 +480,7 @@ def print_report(rows, queue, now, categories, out=sys.stdout):
         print(f"  Property: {where or '(missing)'}", file=out)
         print(f"  Issue:    {clean(row.get('issue')) or '(missing)'}", file=out)
         print(f"  Priority: {clean(row.get('priority')) or '(missing)'}", file=out)
-        for line in category_lines(classify(clean(row.get("issue")), categories)):
+        for line in category_lines(classify(clean(row.get("issue")), categories), clean(row.get("priority"))):
             print(line, file=out)
         for i, f in enumerate(flags, 1):
             print(f"  {i}. Reason ({f.severity}): {f.detail}", file=out)

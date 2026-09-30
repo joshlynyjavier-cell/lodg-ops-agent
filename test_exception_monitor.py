@@ -6,8 +6,8 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from exception_monitor import (DEFAULT_CONFIG_PATH, ConfigError, build_queue, evaluate, load_config,
-                               print_report, write_flags_csv)
+from exception_monitor import (DEFAULT_CONFIG_PATH, ConfigError, build_queue, category_lines, evaluate,
+                               load_config, print_report, write_flags_csv)
 from issue_categories import DEFAULT_CATEGORIES_PATH, CategoryError, classify, load_categories
 
 NOW = datetime(2026, 9, 30, 9, 0)
@@ -250,6 +250,72 @@ class CategoryTests(unittest.TestCase):
         self.addCleanup(Path(tmp.name).unlink)
         with self.assertRaisesRegex(CategoryError, "min_priority"):
             load_categories(tmp.name)
+
+
+class VendorAwareActionTests(unittest.TestCase):
+    """Actions must never send an operator to a vendor that doesn't exist."""
+
+    CONTACT_WORDING = ("the vendor", "assigned vendor", "Get a status from", "Contact ", "Call ")
+
+    def assert_no_vendor_contact(self, flags):
+        for f in flags:
+            if f.rule in ("NO_RESPONSE", "STALLED_PROGRESS", "OVER_TIME_LIMIT", "LONG_RUNNING_EMERGENCY"):
+                for wording in self.CONTACT_WORDING:
+                    self.assertNotIn(wording, f.action, (f.rule, f.action))
+
+    def test_emergency_without_vendor_gets_escalation_not_vendor_contact(self):
+        row = emergency(issue="Gas smell in kitchen", vendor_assigned="", vendor_confirmed="")
+        flags = evaluate(row, NOW, CONFIG, CATEGORIES)
+        self.assert_no_vendor_contact(flags)
+        action = next(f.action for f in flags if f.rule == "NO_RESPONSE")
+        self.assertIn("No vendor is assigned", action)
+        self.assertIn("licensed gas technician", action)
+
+    def test_overdue_request_without_vendor_gets_dispatch_step(self):
+        row = request(priority="High", issue="Refrigerator not working", vendor_assigned="", vendor_confirmed="",
+                      created_at="2026-09-28 09:00")
+        flags = evaluate(row, NOW, CONFIG, CATEGORIES)
+        self.assert_no_vendor_contact(flags)
+        action = next(f.action for f in flags if f.rule == "OVER_TIME_LIMIT")
+        self.assertIn("Assign an appliance repair vendor", action)
+
+    def test_stalled_and_long_running_without_vendor(self):
+        stalled = emergency(vendor_assigned="", created_at="2026-09-30 00:00", last_progress_at="2026-09-30 02:00")
+        long_running = emergency(vendor_assigned="", created_at="2026-09-28 09:00", last_progress_at="2026-09-30 08:30")
+        for row in (stalled, long_running):
+            self.assert_no_vendor_contact(evaluate(row, NOW, CONFIG, CATEGORIES))
+
+    def test_assigned_vendor_is_named(self):
+        row = request(priority="High", vendor_assigned="AquaFlow Plumbing", issue="Leaking faucet",
+                      created_at="2026-09-28 09:00")
+        action = next(f.action for f in evaluate(row, NOW, CONFIG, CATEGORIES) if f.rule == "OVER_TIME_LIMIT")
+        self.assertIn("Get a status from AquaFlow Plumbing", action)
+
+    def test_no_sample_action_contacts_a_missing_vendor(self):
+        path = Path(__file__).with_name("maintenance_requests.csv")
+        with open(path, newline="") as fh:
+            rows = [r for r in csv.DictReader(fh) if not r["vendor_assigned"].strip()]
+        for row in rows:
+            self.assert_no_vendor_contact(evaluate(row, NOW, CONFIG, CATEGORIES))
+
+
+class ConflictingStandardActionTests(unittest.TestCase):
+    def test_routine_action_withheld_when_priority_is_higher(self):
+        match = classify("Replace burned-out bedroom lightbulb", CATEGORIES)
+        text = "\n".join(category_lines(match, "Emergency"))
+        self.assertNotIn("next available routine slot", text)
+        self.assertIn("conflicts with the assigned Emergency priority", text)
+
+    def test_routine_action_shown_within_usual_priority(self):
+        match = classify("Replace burned-out bedroom lightbulb", CATEGORIES)
+        self.assertIn("next available routine slot", "\n".join(category_lines(match, "Low")))
+
+    def test_mismatch_still_flagged_and_priority_respected(self):
+        row = emergency(issue="Replace burned-out bedroom lightbulb")
+        flags = evaluate(row, NOW, CONFIG, CATEGORIES)
+        self.assertIn("PRIORITY_MISMATCH", {f.rule for f in flags})
+        self.assertIn(("NO_RESPONSE", "critical"), {(f.rule, f.severity) for f in flags})
+        self.assertEqual(row["priority"], "Emergency")
 
 
 class NoExternalActionsTests(unittest.TestCase):
