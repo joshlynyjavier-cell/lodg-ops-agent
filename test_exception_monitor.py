@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from exception_monitor import DEFAULT_CONFIG_PATH, ConfigError, build_queue, evaluate, load_config
+from exception_monitor import DEFAULT_CONFIG_PATH, ConfigError, build_queue, evaluate, load_config, write_flags_csv
 
 NOW = datetime(2026, 9, 30, 9, 0)
 CONFIG = load_config()
@@ -214,6 +214,29 @@ class SampleDataTests(unittest.TestCase):
         with open(path, newline="") as fh:
             self.queue = build_queue(list(csv.DictReader(fh)), NOW, CONFIG)
         self.flagged = {row["request_id"]: {f.rule for f in flags} for row, flags in self.queue}
+
+    def test_every_flag_has_a_reason_and_recommended_action(self):
+        for row, flags in self.queue:
+            for f in flags:
+                self.assertTrue(f.detail and f.action, (row["request_id"], f.rule))
+
+    def test_flags_csv_has_requested_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "exceptions.csv")
+            write_flags_csv(self.queue, path)
+            with open(path, newline="") as fh:
+                rows = list(csv.DictReader(fh))
+        for column in ("request_id", "property", "issue", "priority", "reason", "recommended_action"):
+            self.assertIn(column, rows[0])
+        self.assertEqual({r["request_id"] for r in rows}, set(self.flagged))
+
+    def test_monitor_does_not_modify_requests(self):
+        path = Path(__file__).with_name("maintenance_requests.csv")
+        with open(path, newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        before = [dict(r) for r in rows]
+        build_queue(rows, NOW, CONFIG)
+        self.assertEqual(rows, before)
 
     def test_emergency_stages_in_sample_data(self):
         self.assertIn("NO_RESPONSE", self.flagged["MR-1001"])

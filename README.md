@@ -12,6 +12,22 @@ python3 -m unittest test_exception_monitor
 
 `--as-of` defaults to the current time. The sample data is built around 2026-09-30 09:00.
 
+## Output
+
+For every flagged request, the report shows the request ID, property, issue and current priority, then each reason it was flagged with a recommended next action. Requests are ranked most urgent first.
+
+```
+[CRITICAL] MR-1023
+  Property: Pine Ridge Townhomes, 31
+  Issue:    Carbon monoxide alarm going off
+  Priority: Low
+  1. Reason (critical): Issue suggests an urgent safety problem but priority is Low.
+     Next action: Have a supervisor review the priority now. The monitor has not changed it.
+```
+
+`--output exceptions.csv` writes the same information as one row per reason, for use in a spreadsheet.
+Recommended actions are suggestions for a person. The monitor never assigns vendors, approves costs, contacts residents or changes priorities.
+
 ## Changing thresholds
 
 Every threshold lives in [`monitor_config.toml`](monitor_config.toml), with a comment explaining each one.

@@ -136,7 +136,8 @@ def load_config(path=DEFAULT_CONFIG_PATH):
 class Flag:
     rule: str
     severity: str
-    detail: str
+    detail: str  # why the request was flagged
+    action: str  # recommended next step for a person; the monitor takes no action itself
 
 
 def clean(value):
@@ -201,18 +202,24 @@ def emergency_flags(age, last_progress, now, config):
         if age > config.emergency_response:
             return [Flag("NO_RESPONSE", "critical",
                          f"No progress recorded {fmt_duration(age)} after the request "
-                         f"(limit {fmt_duration(config.emergency_response)}).")]
+                         f"(limit {fmt_duration(config.emergency_response)}).",
+                         "Call the vendor or on-call technician for an arrival time; escalate to the "
+                         "property manager if no one is on the way.")]
         return []
     idle = now - last_progress
     if idle > config.emergency_stalled_after:
         return [Flag("STALLED_PROGRESS", "high",
                      f"Last progress {fmt_duration(idle)} ago (limit {fmt_duration(config.emergency_stalled_after)}); "
-                     f"emergency unresolved for {fmt_duration(age)}.")]
+                     f"emergency unresolved for {fmt_duration(age)}.",
+                     "Contact the vendor for a status and next step; escalate to the property "
+                     "manager if work has stopped.")]
     if age > config.emergency_long_running_review:
         return [Flag("LONG_RUNNING_EMERGENCY", "medium",
                      f"Work is active (last progress {fmt_duration(idle)} ago) but the emergency is "
                      f"unresolved after {fmt_duration(age)} (review after "
-                     f"{fmt_duration(config.emergency_long_running_review)}).")]
+                     f"{fmt_duration(config.emergency_long_running_review)}).",
+                     "Review the repair timeline with the vendor and decide whether the resident "
+                     "needs temporary arrangements.")]
     return []
 
 
@@ -264,13 +271,18 @@ def evaluate(row, now, config):
         if not priority:
             skipped.append("dispatch and resident-update checks")
         note = f" Can't check {' or '.join(skipped)} until fixed." if skipped else ""
-        flags.append(Flag("MISSING_INFO", "high", f"Missing or invalid: {', '.join(blocking)}.{note}"))
+        flags.append(Flag("MISSING_INFO", "high", f"Missing or invalid: {', '.join(blocking)}.{note}",
+                          "Contact the requester or check the original request to fill in the missing "
+                          "details, then triage it."))
     if not clean(row.get("unit")):
-        flags.append(Flag("MISSING_INFO", "medium", "No unit recorded (use 'Common Area' for shared spaces)."))
+        flags.append(Flag("MISSING_INFO", "medium", "No unit recorded.",
+                          "Add the unit number, or 'Common Area' for shared spaces."))
     if cost_invalid:
-        flags.append(Flag("MISSING_INFO", "medium", f"Invalid estimated_cost: {row.get('estimated_cost')!r}."))
+        flags.append(Flag("MISSING_INFO", "medium", f"Invalid estimated_cost: {row.get('estimated_cost')!r}.",
+                          "Correct the cost estimate so the approval check can run."))
     if progress_invalid:
-        flags.append(Flag("MISSING_INFO", "medium", f"Invalid last_progress_at: {row.get('last_progress_at')!r}."))
+        flags.append(Flag("MISSING_INFO", "medium", f"Invalid last_progress_at: {row.get('last_progress_at')!r}.",
+                          "Correct the progress timestamp (YYYY-MM-DD HH:MM)."))
 
     age = now - created if created else None
 
@@ -280,12 +292,15 @@ def evaluate(row, now, config):
     if status == "On Hold":
         if not hold_reason or not hold_until:
             flags.append(Flag("INVALID_HOLD", "medium",
-                              "On Hold without a reason and end date; time limits still apply."))
+                              "On Hold without a reason and end date; time limits still apply.",
+                              "Record why the request is on hold and when it ends, or take it off hold."))
         elif hold_until <= now:
             flags.append(Flag("HOLD_EXPIRED", "medium",
-                              f"Hold ended {hold_until:%Y-%m-%d}; time limits apply again."))
+                              f"Hold ended {hold_until:%Y-%m-%d}; time limits apply again.",
+                              "Resume the work, or record a new hold reason and end date."))
         elif priority == "Emergency":
-            flags.append(Flag("INVALID_HOLD", "high", "Emergency requests can't be put on hold."))
+            flags.append(Flag("INVALID_HOLD", "high", "Emergency requests can't be put on hold.",
+                              "Take the emergency off hold and confirm a vendor is responding."))
         else:
             paused = True
 
@@ -295,9 +310,11 @@ def evaluate(row, now, config):
         severity = "critical" if priority == "Emergency" else "high"
         if vendor:
             detail = f"{vendor} assigned but has not confirmed; {priority} request open {fmt_duration(age)}."
+            action = f"Call {vendor} to confirm dispatch; line up a backup vendor if they can't respond."
         else:
             detail = f"No vendor assigned; {priority} request open {fmt_duration(age)}."
-        flags.append(Flag("NO_CONFIRMED_DISPATCH", severity, detail))
+            action = "Assign a vendor and get confirmation of dispatch."
+        flags.append(Flag("NO_CONFIRMED_DISPATCH", severity, detail, action))
 
     # Emergencies are checked by stage (response, active work, long-running);
     # an emergency with a confirmed vendor actively working is not treated
@@ -315,9 +332,11 @@ def evaluate(row, now, config):
             if age > limit * config.resolution_multiplier:
                 severity = escalate(severity)
             detail = f"{priority} request unresolved for {fmt_duration(age)} (limit {fmt_duration(limit)})."
+            action = "Get a status from the vendor and set a completion date; escalate if it is stuck."
             if scheduled is not None and scheduled <= now:
                 detail += f" Scheduled visit on {scheduled:%Y-%m-%d %H:%M} has passed."
-            flags.append(Flag("OVER_TIME_LIMIT", severity, detail))
+                action = "Confirm whether the scheduled visit happened, and reschedule if it didn't."
+            flags.append(Flag("OVER_TIME_LIMIT", severity, detail, action))
 
     # Priority mismatch: flagged for review, never changed. The assigned
     # priority still drives every other rule, so an Emergency label is
@@ -326,24 +345,25 @@ def evaluate(row, now, config):
     if kind == "urgent" and PRIORITIES.index(priority or "Low") <= PRIORITIES.index("Medium"):
         label = priority or "missing"
         flags.append(Flag("PRIORITY_MISMATCH", "critical",
-                          f"Issue suggests an urgent safety problem but priority is {label}. "
-                          "Confirm the priority; it has not been changed."))
+                          f"Issue suggests an urgent safety problem but priority is {label}.",
+                          "Have a supervisor review the priority now. The monitor has not changed it."))
     elif kind == "routine" and priority in ("High", "Emergency"):
         flags.append(Flag("PRIORITY_MISMATCH", "medium",
-                          f"Issue suggests routine work but priority is {priority}. "
-                          "Confirm the priority; it has not been changed."))
+                          f"Issue suggests routine work but priority is {priority}.",
+                          f"Have a supervisor review the priority. Until then it is handled as {priority}."))
 
     # Cost review. Never a reason to hold up emergency work.
     if cost is not None and cost > config.high_cost_threshold and not cost_approved:
-        detail = (f"Estimate ${cost:,.0f} exceeds ${config.high_cost_threshold:,.0f} and is not approved. "
-                  "Needs human review.")
+        detail = f"Estimate ${cost:,.0f} exceeds ${config.high_cost_threshold:,.0f} and is not approved."
+        action = "Send the estimate to the approver for review."
         if priority == "Emergency":
-            detail += " Do not delay emergency work for approval."
-        flags.append(Flag("HIGH_COST_REVIEW", "medium", detail))
+            action += " Do not hold up emergency work while it is reviewed."
+        flags.append(Flag("HIGH_COST_REVIEW", "medium", detail, action))
     elif cost is None and not cost_invalid and age is not None and age > config.missing_estimate_grace:
         severity = "medium" if priority in ("High", "Emergency") else "low"
         flags.append(Flag("MISSING_INFO", severity,
-                          f"No cost estimate after {fmt_duration(age)}; approval threshold can't be checked."))
+                          f"No cost estimate after {fmt_duration(age)}; approval threshold can't be checked.",
+                          "Ask the vendor or maintenance team for a cost estimate."))
 
     # Resident updates. Staff-reported requests have no resident to update;
     # a blank reporter is treated as a resident to stay on the safe side.
@@ -355,7 +375,9 @@ def evaluate(row, now, config):
                 detail = f"Resident last updated {fmt_duration(since)} ago (limit {fmt_duration(limit)})."
             else:
                 detail = f"Resident never updated, {fmt_duration(since)} since request (limit {fmt_duration(limit)})."
-            flags.append(Flag("RESIDENT_UPDATE_OVERDUE", UPDATE_SEVERITY[priority], detail))
+            flags.append(Flag("RESIDENT_UPDATE_OVERDUE", UPDATE_SEVERITY[priority], detail,
+                              "Send the resident an update with the current status, next step and "
+                              "expected timing."))
 
     return flags
 
@@ -402,25 +424,28 @@ def print_report(rows, queue, now, out=sys.stdout):
     print(f"Maintenance exception report - as of {now:%Y-%m-%d %H:%M}", file=out)
     print(f"{len(rows)} requests checked, {len(queue)} need attention: "
           + ", ".join(f"{counts[s]} {s}" for s in reversed(SEVERITIES)), file=out)
+    print("Nothing below has been changed. Each item needs a person to review and decide.", file=out)
     for row, flags in queue:
-        where = " ".join(v for v in (row.get("property"), row.get("unit")) if clean(v))
-        header = " | ".join([row["request_id"], where or "(no location)",
-                             clean(row.get("priority")) or "(no priority)",
-                             clean(row.get("status")) or "(no status)"])
-        print(f"\n[{SEVERITIES[top_severity(flags)].upper()}] {header}", file=out)
-        print(f"  {clean(row.get('issue')) or '(no issue description)'}", file=out)
-        for f in flags:
-            print(f"  - {f.severity:<8} {f.rule:<24} {f.detail}", file=out)
+        where = ", ".join(v for v in (row.get("property"), row.get("unit")) if clean(v))
+        print(f"\n[{SEVERITIES[top_severity(flags)].upper()}] {row['request_id']}", file=out)
+        print(f"  Property: {where or '(missing)'}", file=out)
+        print(f"  Issue:    {clean(row.get('issue')) or '(missing)'}", file=out)
+        print(f"  Priority: {clean(row.get('priority')) or '(missing)'}", file=out)
+        for i, f in enumerate(flags, 1):
+            print(f"  {i}. Reason ({f.severity}): {f.detail}", file=out)
+            print(f"     Next action: {f.action}", file=out)
 
 
 def write_flags_csv(queue, path):
     with open(path, "w", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["request_id", "property", "unit", "priority", "status", "rule", "severity", "detail"])
+        writer.writerow(["request_id", "property", "unit", "issue", "priority", "status",
+                         "severity", "rule", "reason", "recommended_action"])
         for row, flags in queue:
             for f in flags:
                 writer.writerow([row["request_id"], row.get("property", ""), row.get("unit", ""),
-                                 row.get("priority", ""), row.get("status", ""), f.rule, f.severity, f.detail])
+                                 row.get("issue", ""), row.get("priority", ""), row.get("status", ""),
+                                 f.severity, f.rule, f.detail, f.action])
 
 
 def main(argv=None):
