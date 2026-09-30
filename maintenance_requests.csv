@@ -1,0 +1,26 @@
+request_id,property,unit,issue,priority,created_at,status,vendor_assigned,estimated_cost,last_resident_update
+MR-1001,Maple Court Apartments,2B,Burst pipe under kitchen sink - water on floor,Emergency,2026-09-30 06:15,Open,,850,
+MR-1002,Maple Court Apartments,4A,Leaking bathroom faucet,Low,2026-09-29 14:00,Open,AquaFlow Plumbing,120,2026-09-29 15:00
+MR-1003,Maple Court Apartments,1C,AC not cooling - unit at 84F,High,2026-09-25 10:30,In Progress,CoolAir HVAC,1450,2026-09-26 09:00
+MR-1004,Maple Court Apartments,3D,Gas smell reported near stove,Emergency,2026-09-29 22:40,Open,,,2026-09-29 22:45
+MR-1005,Maple Court Apartments,,Broken lock on lobby entry door,Medium,2026-09-28 08:00,Open,SecureLock Services,300,2026-09-28 08:30
+MR-1006,Riverside Lofts,101,Refrigerator not working - food spoiling,High,2026-09-27 11:00,Pending Vendor,,900,2026-09-27 11:30
+MR-1007,Riverside Lofts,205,Roof leak causing ceiling water damage,Emergency,2026-09-28 19:00,In Progress,Summit Roofing,7800,2026-09-29 08:00
+MR-1008,Riverside Lofts,310,Dishwasher not draining,Medium,2026-09-29 09:00,Open,ApplianceCare Pros,220,2026-09-29 16:00
+MR-1009,Riverside Lofts,412,Mold spreading on bathroom ceiling,High,2026-08-18 13:00,Open,,3200,2026-08-20 10:00
+MR-1010,Riverside Lofts,108,Hallway light fixture flickering,Low,2026-09-10 10:00,Completed,BrightSpark Electric,95,2026-09-12 14:00
+MR-1011,Oakwood Terrace,12,Water heater failure - no hot water,High,2026-09-26 07:30,In Progress,AquaFlow Plumbing,2400,2026-09-26 12:00
+MR-1012,Oakwood Terrace,7,Cockroach infestation in kitchen,Medium,2026-09-15 09:00,Open,PestAway Solutions,450,
+MR-1013,Oakwood Terrace,3,Bedroom window will not lock,Medium,,Open,,,
+MR-1014,Oakwood Terrace,15,Electrical outlet sparking,Emergency,2026-09-30 07:50,Open,BrightSpark Electric,350,2026-09-30 08:05
+MR-1015,Oakwood Terrace,9,Foundation crack in exterior wall,High,2026-07-22 15:00,On Hold,,18500,2026-08-05 11:00
+MR-1016,Harbor View Residences,Lobby,Elevator out of service,Emergency,2026-09-29 06:00,In Progress,Apex Elevator Co,12000,2026-09-29 07:00
+MR-1017,Harbor View Residences,802,Toilet overflowing - water leaking to unit below,Emergency,2026-09-30 02:10,Open,,400,
+MR-1018,Harbor View Residences,604,Garbage disposal jammed,Low,2026-09-28 12:00,Completed,AquaFlow Plumbing,150,2026-09-29 10:00
+MR-1019,Harbor View Residences,1101,Balcony railing loose,High,2026-09-20 16:00,Open,,1800,2026-09-21 09:00
+MR-1020,Harbor View Residences,307,Carpet replacement after prior flood,Medium,2026-09-05 10:00,In Progress,FloorMasters,5600,2026-09-18 13:00
+MR-1021,Pine Ridge Townhomes,22,Garage door stuck halfway,Medium,2026-09-29 17:00,Open,,275,2026-09-29 17:30
+MR-1022,Pine Ridge Townhomes,14,No heat - furnace failure,Emergency,2026-09-27 21:00,Pending Vendor,CoolAir HVAC,3900,2026-09-28 09:00
+MR-1023,Pine Ridge Townhomes,31,Smoke detector chirping,Low,2026-09-29 11:00,Open,,,2026-09-29 11:15
+MR-1024,Pine Ridge Townhomes,8,,High,2026-09-28 13:00,Open,,,
+MR-1025,Pine Ridge Townhomes,19,Sliding patio door off track,,2026-09-24 10:00,Open,HandyPro Maintenance,180,2026-09-24 10:30
