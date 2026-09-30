@@ -118,6 +118,23 @@
 
   footer { border-top: 1px solid var(--line); padding-top: 1.25rem; font-size: 0.85rem; color: var(--muted); display: grid; gap: 0.35rem; }
 
+  /* Narrow screens: each table row becomes a stacked card, so no column is hidden off-screen. */
+  @media (max-width: 900px) {
+    table { min-width: 0; }
+    thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    table, tbody, tr, td { display: block; width: 100%; box-sizing: border-box; }
+    tr { display: grid; gap: 0.6rem; padding: 1rem 1.1rem; border-bottom: 1px solid var(--line); box-shadow: inset 3px 0 0 var(--sev, transparent); }
+    tr:last-child { border-bottom: 0; }
+    td, tr:last-child td { padding: 0; border: 0; }
+    td:first-child { box-shadow: none; }
+    td:nth-child(3)::before, td:nth-child(4)::before {
+      display: block; margin-bottom: 0.15rem; font: 600 0.7rem/1.2 var(--font-body);
+      letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+    }
+    td:nth-child(3)::before { content: "Why it was flagged"; }
+    td:nth-child(4)::before { content: "Recommended next action"; }
+  }
+
   @media (max-width: 760px) {
     .flow { grid-template-columns: 1fr; }
     .arrow { justify-self: center; transform: rotate(90deg); }
