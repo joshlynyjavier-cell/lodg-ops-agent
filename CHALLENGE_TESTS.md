@@ -34,3 +34,27 @@ Five of 8 flagged: 2 critical, 1 high, 1 medium, 1 low. Every prediction matched
 | CH-06 | Yes (design gap) | Not flagged. The unapproved $14,500 cost on completed work is never surfaced. |
 | CH-07 | Yes | High `MISSING_INFO` (property, "urgent", MM/DD/YYYY date), unit missing, needs review. |
 | CH-08 | Yes | Hold paused the time limit; low `RESIDENT_UPDATE_OVERDUE` only. The appliance standard action includes a refrigerator sentence that doesn't apply to a dishwasher (not predicted). |
+
+## Final V1 revision and rerun
+
+Changes made in response to the results above:
+
+1. **Hazard screening before routine classification.** Danger signals (smell, odor, smoke, burning, sparking, pouring water, water through the ceiling, sagging, collapse and similar) stop a routine keyword from deciding the category. Without a confirmed safety category, the request goes to human review, at critical severity when labeled below High. An Emergency label is never lowered or challenged.
+2. **Plural forms** match ("rotten egg" matches "rotten eggs"). Keyword classification is documented as a V1 limitation.
+3. **Financial review** of completed work over $1,000 without recorded approval, in a separate report section outside the maintenance queue.
+4. **Refrigerator guidance** moved to its own Refrigerator category, so the generic appliance action no longer mentions refrigerators.
+
+All eight cases are now automated tests (`ChallengeCaseTests` in `test_exception_monitor.py`).
+
+| Case | Now meets correct behavior? | Actual after revision |
+|---|---|---|
+| CH-01 | **Yes** (was No) | Possible hazard ('pouring', 'through ceiling'): high `NEEDS_HUMAN_REVIEW`; critical dispatch and response flags; no false mismatch; routine action not shown; dispatch step is "have a supervisor identify the possible hazard now and dispatch the right vendor". |
+| CH-02 | Yes | Not flagged. |
+| CH-03 | Yes | Unchanged. |
+| CH-04 | **Yes** (was No) | Gas category via "rotten eggs"; critical `PRIORITY_MISMATCH`; gas escalation procedure; ranked with emergencies. |
+| CH-05 | Yes | Unchanged. |
+| CH-06 | **Yes** (gap closed) | Not in the maintenance queue; listed under Financial review ("approval recorded as 'No'"). |
+| CH-07 | Yes | Unchanged. |
+| CH-08 | Yes | Unchanged, and the appliance action no longer mentions refrigerators. |
+
+No challenge case fails. The full suite (85 tests) passes, and the sample-data report is unchanged apart from MR-1006 now being categorized as Refrigerator and an empty Financial review section.

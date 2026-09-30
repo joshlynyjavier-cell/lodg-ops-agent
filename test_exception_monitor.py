@@ -6,8 +6,8 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from exception_monitor import (DEFAULT_CONFIG_PATH, ConfigError, build_queue, category_lines, evaluate,
-                               load_config, print_report, write_flags_csv)
+from exception_monitor import (DEFAULT_CONFIG_PATH, ConfigError, build_financial_review, build_queue,
+                               category_lines, evaluate, load_config, print_report, write_flags_csv)
 from issue_categories import DEFAULT_CATEGORIES_PATH, CategoryError, classify, load_categories
 
 NOW = datetime(2026, 9, 30, 9, 0)
@@ -316,6 +316,124 @@ class ConflictingStandardActionTests(unittest.TestCase):
         self.assertIn("PRIORITY_MISMATCH", {f.rule for f in flags})
         self.assertIn(("NO_RESPONSE", "critical"), {(f.rule, f.severity) for f in flags})
         self.assertEqual(row["priority"], "Emergency")
+
+
+class HazardScreeningTests(unittest.TestCase):
+    """A routine keyword must never override a possible danger signal."""
+
+    def test_hazard_words_override_routine_match(self):
+        match = classify("Water pouring through ceiling light fixture", CATEGORIES)
+        self.assertEqual(match.categories, [])
+        self.assertIn("pouring", match.hazard_indicators)
+        self.assertEqual([c.key for c in match.also_matched], ["general_maintenance"])
+
+    def test_confirmed_safety_category_still_wins(self):
+        self.assertEqual(category_of("Electrical outlet sparking"), ["electrical_hazard"])
+
+    def test_possible_hazard_labeled_low_is_critical_review(self):
+        flags = evaluate(request(issue="Burning odor near dryer", priority="Low"), NOW, CONFIG, CATEGORIES)
+        self.assertIn(("NEEDS_HUMAN_REVIEW", "critical"), {(f.rule, f.severity) for f in flags})
+        self.assertNotIn("PRIORITY_MISMATCH", {f.rule for f in flags})
+
+    def test_hazard_review_never_challenges_emergency_label(self):
+        row = emergency(issue="Water pouring through ceiling light fixture")
+        flags = evaluate(row, NOW, CONFIG, CATEGORIES)
+        self.assertNotIn("PRIORITY_MISMATCH", {f.rule for f in flags})
+        self.assertIn(("NEEDS_HUMAN_REVIEW", "high"), {(f.rule, f.severity) for f in flags})
+        self.assertEqual(row["priority"], "Emergency")
+
+    def test_hazard_review_withholds_routine_standard_action(self):
+        match = classify("Water pouring through ceiling light fixture", CATEGORIES)
+        text = "\n".join(category_lines(match, "Emergency"))
+        self.assertIn("possible hazard", text)
+        self.assertNotIn("Standard action", text)
+
+    def test_hazard_exclusion(self):
+        self.assertEqual(category_of("Smoke detector chirping"), ["general_maintenance"])
+
+    def test_plural_forms_match(self):
+        self.assertEqual(category_of("Rotten eggs smell in hallway"), ["gas"])
+        self.assertEqual(category_of("Broken pipes under sink"), ["plumbing"])
+        self.assertEqual(category_of("Kitchen cabinets falling apart"), ["general_maintenance"])
+
+
+class FinancialReviewTests(unittest.TestCase):
+    def completed(self, **overrides):
+        fields = {"status": "Completed", "estimated_cost": "4000", "cost_approved": ""}
+        fields.update(overrides)
+        return request(**fields)
+
+    def test_completed_unapproved_high_cost_is_flagged_separately(self):
+        row = self.completed()
+        self.assertEqual(evaluate(row, NOW, CONFIG, CATEGORIES), [])  # not in the maintenance queue
+        review = build_financial_review([row], CONFIG)
+        self.assertEqual([f.rule for _, f in review], ["FINANCIAL_REVIEW"])
+
+    def test_explicitly_not_approved_is_flagged(self):
+        self.assertEqual(len(build_financial_review([self.completed(cost_approved="No")], CONFIG)), 1)
+
+    def test_approved_low_cost_or_open_work_is_not_flagged(self):
+        rows = [self.completed(cost_approved="Yes"), self.completed(estimated_cost="900"),
+                request(estimated_cost="4000")]
+        self.assertEqual(build_financial_review(rows, CONFIG), [])
+
+    def test_report_prints_financial_section_separately(self):
+        out = io.StringIO()
+        row = self.completed()
+        print_report([row], [], NOW, CATEGORIES, build_financial_review([row], CONFIG), out=out)
+        text = out.getvalue()
+        self.assertIn("Financial review: completed work (1)", text)
+        self.assertIn("not active maintenance issues", text)
+
+
+class ApplianceWordingTests(unittest.TestCase):
+    def test_refrigerator_guidance_only_for_refrigerators(self):
+        dishwasher = "\n".join(category_lines(classify("Dishwasher door latch broken", CATEGORIES), "Medium"))
+        fridge = "\n".join(category_lines(classify("Refrigerator not cooling", CATEGORIES), "High"))
+        self.assertNotIn("food loss", dishwasher)
+        self.assertIn("food loss", fridge)
+
+
+class ChallengeCaseTests(unittest.TestCase):
+    """The eight V1 challenge cases in challenge_cases.csv (see CHALLENGE_TESTS.md)."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(Path(__file__).with_name("challenge_cases.csv"), newline="") as fh:
+            cls.rows = {r["request_id"]: r for r in csv.DictReader(fh)}
+        cls.flags = {rid: {(f.rule, f.severity) for f in evaluate(r, NOW, CONFIG, CATEGORIES)}
+                     for rid, r in cls.rows.items()}
+        cls.financial = {r["request_id"] for r, _ in build_financial_review(cls.rows.values(), CONFIG)}
+
+    def test_ch01_emergency_no_vendor_possible_water_electrical_hazard(self):
+        f = self.flags["CH-01"]
+        self.assertTrue({("NO_CONFIRMED_DISPATCH", "critical"), ("NO_RESPONSE", "critical"),
+                         ("NEEDS_HUMAN_REVIEW", "high")} <= f)
+        self.assertNotIn("PRIORITY_MISMATCH", {rule for rule, _ in f})
+
+    def test_ch02_emergency_actively_worked_is_not_flagged(self):
+        self.assertEqual(self.flags["CH-02"], set())
+
+    def test_ch03_routine_labeled_emergency(self):
+        self.assertEqual(self.flags["CH-03"], {("NO_RESPONSE", "critical"), ("PRIORITY_MISMATCH", "medium")})
+
+    def test_ch04_possible_gas_leak_labeled_low(self):
+        self.assertEqual(category_of(self.rows["CH-04"]["issue"]), ["gas"])
+        self.assertIn(("PRIORITY_MISMATCH", "critical"), self.flags["CH-04"])
+
+    def test_ch05_unfamiliar_issue(self):
+        self.assertEqual(self.flags["CH-05"], {("NEEDS_HUMAN_REVIEW", "medium")})
+
+    def test_ch06_completed_high_cost_goes_to_financial_review_only(self):
+        self.assertEqual(self.flags["CH-06"], set())
+        self.assertEqual(self.financial, {"CH-06"})
+
+    def test_ch07_missing_critical_data(self):
+        self.assertEqual(self.flags["CH-07"], {("MISSING_INFO", "high"), ("MISSING_INFO", "medium"),
+                                                ("NEEDS_HUMAN_REVIEW", "medium")})
+
+    def test_ch08_valid_hold_pauses_time_limit_not_resident_updates(self):
+        self.assertEqual(self.flags["CH-08"], {("RESIDENT_UPDATE_OVERDUE", "low")})
 
 
 class NoExternalActionsTests(unittest.TestCase):

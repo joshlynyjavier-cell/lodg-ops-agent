@@ -16,7 +16,8 @@
 #                "human_review":    always send to a supervisor with the review guidance.
 #                "routine":         show the standard action.
 #   keywords     Phrases that identify the category. Matched as whole words,
-#                ignoring capitals.
+#                ignoring capitals; a plural "s" or "es" also matches
+#                ("rotten egg" matches "rotten eggs").
 #   exclude      Optional. If any of these appear anywhere in the issue text,
 #                the category does not match.
 #   min_priority Safety-critical only: a lower priority is flagged as a mismatch.
@@ -27,9 +28,26 @@
 #
 # How a category is chosen for an issue:
 #   1. Any safety-critical match wins. Two or more: all procedures shown, plus review.
-#   2. Otherwise a human_review match wins.
-#   3. Otherwise exactly one routine match is used.
-#   4. No match, or several routine matches: sent to human review. No guessing.
+#   2. Otherwise, if the issue contains a hazard indicator (see [hazard_screening]),
+#      it goes to human review. A routine keyword can never override a possible hazard.
+#   3. Otherwise a human_review match wins.
+#   4. Otherwise exactly one routine match is used.
+#   5. No match, or several routine matches: sent to human review. No guessing.
+#
+# Keyword matching is a V1 limitation: it only knows the phrases listed here.
+# The hazard screen is a safety net for dangerous wording the categories miss.
+
+# --- Hazard screening ---------------------------------------------------------
+# Danger signals checked BEFORE routine classification. If any appear and no
+# safety-critical category matched, the request goes to human review instead
+# of being treated as routine.
+
+[hazard_screening]
+indicators = ["smell", "odor", "fumes", "smoke", "smoking", "burning", "scorch", "spark",
+              "sparking", "pouring", "gushing", "water intrusion", "water coming through",
+              "through the ceiling", "through ceiling", "flooding", "sagging", "unstable",
+              "collapse", "crumbling", "shock", "hissing"]
+exclude = ["chirp"]
 
 # --- Safety-critical ----------------------------------------------------------
 
@@ -152,9 +170,16 @@ label = "Appliance"
 handling = "routine"
 max_priority = "High"
 vendor = "an appliance repair vendor"
-keywords = ["refrigerator", "fridge", "dishwasher", "washer", "dryer", "oven", "stove", "microwave",
-            "garbage disposal"]
-standard_action = "Check for a warranty or service contract, then dispatch an appliance repair vendor. For a failed refrigerator, discuss food loss or a temporary replacement with the resident."
+keywords = ["dishwasher", "washer", "dryer", "oven", "stove", "microwave", "garbage disposal"]
+standard_action = "Check for a warranty or service contract, then dispatch an appliance repair vendor."
+
+[categories.refrigerator]
+label = "Refrigerator"
+handling = "routine"
+max_priority = "High"
+vendor = "an appliance repair vendor"
+keywords = ["refrigerator", "fridge", "freezer"]
+standard_action = "Check for a warranty or service contract, then dispatch an appliance repair vendor. Discuss food loss or a temporary replacement with the resident."
 
 [categories.access_lock]
 label = "Access / lock"

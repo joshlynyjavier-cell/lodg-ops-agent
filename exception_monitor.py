@@ -170,6 +170,8 @@ def dispatch_step(category_match):
     """How to get someone assigned when no vendor is recorded."""
     if category_match.vendor:
         return f"Assign {category_match.vendor} and get confirmation of dispatch."
+    if category_match.hazard_indicators:
+        return "Have a supervisor identify the possible hazard now and dispatch the right vendor."
     return "Assign an appropriate vendor once a supervisor has reviewed the issue."
 
 
@@ -356,7 +358,16 @@ def evaluate(row, now, config, categories):
 
     # Issues that can't be confidently categorized go to a person rather than
     # getting a guessed category. A blank issue is already flagged above.
-    if issue and category_match.review_reason:
+    if issue and category_match.hazard_indicators:
+        # A possible hazard with no confirmed safety category. Critical when the
+        # assigned priority is below High, since it may be an under-prioritized
+        # danger; the assigned priority is never lowered.
+        below_high = not priority or PRIORITIES.index(priority) < PRIORITIES.index("High")
+        flags.append(Flag("NEEDS_HUMAN_REVIEW", "critical" if below_high else "high", category_match.review_reason,
+                          "Have a supervisor review this now: decide whether it is a safety hazard, which "
+                          "escalation procedure applies and what the priority should be. The monitor has not "
+                          "guessed a category or changed the priority."))
+    elif issue and category_match.review_reason:
         severity = "high" if len(category_match.categories) > 1 else "medium"
         guidance = next((c.review_guidance for c in category_match.categories if c.review_guidance), "")
         if category_match.is_safety_critical:
@@ -395,14 +406,35 @@ def evaluate(row, now, config, categories):
     return flags
 
 
+def financial_review(row, config):
+    """Completed work over the cost threshold without recorded approval.
+    Financial oversight only: not part of the maintenance escalation queue."""
+    if clean(row.get("status")) not in config.resolved_statuses:
+        return None
+    cost, _ = parse_cost(row.get("estimated_cost"))
+    approval = clean(row.get("cost_approved"))
+    if cost is None or cost <= config.high_cost_threshold or approval.lower() == "yes":
+        return None
+    recorded = f"approval recorded as {approval!r}" if approval else "no approval recorded"
+    return Flag("FINANCIAL_REVIEW", "n/a",
+                f"Completed work cost ${cost:,.0f} (over ${config.high_cost_threshold:,.0f}) with {recorded}.",
+                "Send to finance or the property manager for after-the-fact approval review. "
+                "No maintenance action is needed.")
+
+
+def build_financial_review(rows, config):
+    """Return [(row, flag)] for completed work that needs financial review."""
+    return [(row, flag) for row in rows if (flag := financial_review(row, config))]
+
+
 def top_severity(flags):
     return max(SEVERITIES.index(f.severity) for f in flags)
 
 
 def ranking_priority(row, flags):
-    """Priority used only to order the queue: an issue flagged as urgent but
-    labeled lower ranks with emergencies. The row itself is not changed."""
-    if any(f.rule == "PRIORITY_MISMATCH" and f.severity == "critical" for f in flags):
+    """Priority used only to order the queue: a possible safety issue labeled
+    lower ranks with emergencies. The row itself is not changed."""
+    if any(f.rule in ("PRIORITY_MISMATCH", "NEEDS_HUMAN_REVIEW") and f.severity == "critical" for f in flags):
         return PRIORITIES.index("Emergency")
     priority = clean(row.get("priority"))
     return PRIORITIES.index(priority) if priority in PRIORITIES else -1
@@ -441,7 +473,11 @@ def category_lines(category_match, priority):
     the category's usual maximum: the assigned priority is respected until a
     person changes it, and the mismatch is flagged for review instead."""
     lines = []
-    if not category_match.categories:
+    if category_match.hazard_indicators:
+        lines.append("  Category: not confirmed - possible hazard ("
+                     + ", ".join(f"'{h}'" for h in category_match.hazard_indicators)
+                     + "), needs human review now")
+    elif not category_match.categories:
         lines.append("  Category: not recognized - needs human review")
     for c in category_match.categories:
         tag = {"safety_critical": "safety-critical", "human_review": "needs human review"}.get(c.handling, "routine")
@@ -465,7 +501,7 @@ def category_label(category_match):
     return ", ".join(c.label for c in category_match.categories) or "Uncategorized"
 
 
-def print_report(rows, queue, now, categories, out=sys.stdout):
+def print_report(rows, queue, now, categories, financial=(), out=sys.stdout):
     counts = {s: 0 for s in SEVERITIES}
     for _, flags in queue:
         counts[SEVERITIES[top_severity(flags)]] += 1
@@ -486,8 +522,18 @@ def print_report(rows, queue, now, categories, out=sys.stdout):
             print(f"  {i}. Reason ({f.severity}): {f.detail}", file=out)
             print(f"     Next action: {f.action}", file=out)
 
+    print(f"\n=== Financial review: completed work ({len(financial)}) ===", file=out)
+    print("Financial oversight only. These are not active maintenance issues.", file=out)
+    if not financial:
+        print("None.", file=out)
+    for row, f in financial:
+        where = ", ".join(v for v in (row.get("property"), row.get("unit")) if clean(v))
+        print(f"\n{row['request_id']} | {where or '(missing)'} | {clean(row.get('issue')) or '(missing)'}", file=out)
+        print(f"  Reason: {f.detail}", file=out)
+        print(f"  Next action: {f.action}", file=out)
 
-def write_flags_csv(queue, path, categories):
+
+def write_flags_csv(queue, path, categories, financial=()):
     with open(path, "w", newline="") as fh:
         writer = csv.writer(fh)
         writer.writerow(["request_id", "property", "unit", "issue", "category", "priority", "status",
@@ -498,6 +544,10 @@ def write_flags_csv(queue, path, categories):
                 writer.writerow([row["request_id"], row.get("property", ""), row.get("unit", ""),
                                  row.get("issue", ""), category, row.get("priority", ""), row.get("status", ""),
                                  f.severity, f.rule, f.detail, f.action])
+        for row, f in financial:
+            writer.writerow([row["request_id"], row.get("property", ""), row.get("unit", ""),
+                             row.get("issue", ""), "", row.get("priority", ""), row.get("status", ""),
+                             f.severity, f.rule, f.detail, f.action])
 
 
 def main(argv=None):
@@ -521,9 +571,10 @@ def main(argv=None):
     with open(args.csv_path, newline="") as fh:
         rows = list(csv.DictReader(fh))
     queue = build_queue(rows, now, config, categories)
-    print_report(rows, queue, now, categories)
+    financial = build_financial_review(rows, config)
+    print_report(rows, queue, now, categories, financial)
     if args.output:
-        write_flags_csv(queue, args.output, categories)
+        write_flags_csv(queue, args.output, categories, financial)
 
 
 if __name__ == "__main__":

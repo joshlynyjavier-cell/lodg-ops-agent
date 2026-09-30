@@ -1,4 +1,6 @@
-# Maintenance exception monitor (prototype)
+# Maintenance exception monitor (prototype, V1)
+
+**Status: V1 is frozen.** Further changes only for safety-critical failures.
 
 Flags maintenance requests that need a person's attention and ranks them by severity.
 
@@ -48,15 +50,21 @@ Operations can edit either file and rerun the monitor without touching the code.
 
 ## Issue categories
 
-Categories are matched with fixed keywords (whole words, ignoring capitals); no AI model is involved. Every recommended step comes from the category file, so it can be reviewed in advance.
+Categories are matched with fixed keywords (whole words, ignoring capitals, with a plural "s"/"es" also matching); no AI model is involved. Every recommended step comes from the category file, so it can be reviewed in advance.
 
 | Handling | Categories | What the report shows |
 |---|---|---|
 | Safety-critical | gas / carbon monoxide, fire / smoke, flooding / major water leak, electrical hazard, elevator, structural damage / fall hazard | A predefined escalation procedure (prototype example). Actions on the request's flags start with "Follow the escalation procedure above." |
 | Human review | mold / moisture | A `NEEDS_HUMAN_REVIEW` flag with review guidance, because severity depends on context the data doesn't have |
-| Routine | HVAC, plumbing, appliance, access / lock, general maintenance | A standard action, and vendor-specific wording in dispatch actions |
+| Routine | HVAC, plumbing, appliance, refrigerator, access / lock, general maintenance | A standard action, and vendor-specific wording in dispatch actions. Food-loss guidance appears only for refrigerator issues |
 
-How a category is chosen: any safety-critical match wins (two or more show all procedures plus a high-severity review flag); otherwise a human-review match; otherwise exactly one routine match. If nothing matches, or several routine categories match, the request gets a `NEEDS_HUMAN_REVIEW` flag instead of a guess. Pest issues such as cockroaches deliberately have no category in V1 and go to human review.
+How a category is chosen:
+
+1. Any safety-critical match wins. Two or more show all procedures plus a high-severity review flag.
+2. **Hazard screening.** Otherwise, if the issue contains a danger signal (smell, odor, smoke, burning, sparking, pouring water, water through the ceiling, sagging, collapse and similar, listed under `[hazard_screening]`), it goes to human review. A routine keyword can never override a possible hazard. The review flag is critical when the assigned priority is below High, since it may be an under-prioritized danger, and high otherwise. An assigned Emergency is never lowered or challenged by a keyword match.
+3. Otherwise a human-review match (mold / moisture).
+4. Otherwise exactly one routine match.
+5. If nothing matches, or several routine categories match, the request gets a `NEEDS_HUMAN_REVIEW` flag instead of a guess. Pest issues such as cockroaches deliberately have no category in V1 and go to human review.
 
 ## Rules
 
@@ -73,9 +81,13 @@ Values in the table are the current defaults.
 | `RESIDENT_UPDATE_OVERDUE` | No resident update within Emergency 2 h, High 24 h, Medium 48 h, Low 7 d. Never updated counts from creation. Skipped when `reported_by` is Staff | high → low |
 | `HIGH_COST_REVIEW` | Estimate > $1,000 and `cost_approved` isn't Yes. Never holds up emergency work | medium |
 | `PRIORITY_MISMATCH` | Priority is below a safety-critical category's minimum, or above a routine category's maximum | critical / medium |
-| `NEEDS_HUMAN_REVIEW` | Issue is uncategorized, ambiguous, mold / moisture, or matches two safety-critical categories | medium / high |
+| `NEEDS_HUMAN_REVIEW` | Possible hazard with no confirmed safety category; issue uncategorized, ambiguous, mold / moisture, or matching two safety-critical categories | critical → medium |
 | `MISSING_INFO` | Blank, placeholder (TBD, N/A…) or invalid issue, priority, created_at, status or property (high, since other rules can't run); missing unit; invalid `last_progress_at`; no cost estimate after 24 h | high → low |
 | `INVALID_HOLD` / `HOLD_EXPIRED` | On Hold without `hold_reason` and `hold_until`, past its end date, or an Emergency on hold | medium / high |
+
+### Financial review (separate from maintenance)
+
+Completed requests are never in the maintenance queue. Completed work over $1,000 whose `cost_approved` is blank or anything other than Yes gets a `FINANCIAL_REVIEW` item in a separate section at the end of the report, for finance or the property manager. It is financial oversight, not an active maintenance issue, so it has no severity and doesn't affect the maintenance ranking.
 
 ### Emergencies: response vs. resolution
 
@@ -87,6 +99,16 @@ Progress comes from `last_progress_at`: the latest time real work happened (vend
 
 Mismatches are flagged for human review only. The assigned priority still drives every other rule, so an Emergency is never downgraded automatically: a lightbulb labeled Emergency is still checked as an Emergency, with the mismatch flagged beside it.
 For ordering the list only, a safety-critical issue labeled below its minimum ranks with emergencies.
+
+## V1 limitations
+
+- **Keyword-based classification.** Categories and the hazard screen only recognize the phrases listed in `issue_categories.toml` (plus simple plurals). Unfamiliar wording can still be missed or miscategorized; the hazard screen and `NEEDS_HUMAN_REVIEW` reduce that risk but don't remove it. The keyword lists are deliberately not exhaustive.
+- **The hazard screen leans cautious.** Common words like "smell" send issues such as "bathroom smells musty" to critical human review. That is intended: a false alarm costs a supervisor a minute, while a missed hazard can cost much more.
+- **Placeholder procedures.** Escalation procedures are prototype examples and must be replaced before real-world use.
+- **Snapshot only.** Each run evaluates the CSV as it stands; there is no memory between runs, so repeat alerts aren't suppressed.
+- **Dates must be `YYYY-MM-DD HH:MM`.** Other formats (such as US-style `09/29/2026`) are flagged as invalid rather than parsed.
+
+See [`CHALLENGE_TESTS.md`](CHALLENGE_TESTS.md) for the adversarial test cases and results.
 
 ## Future improvements
 
