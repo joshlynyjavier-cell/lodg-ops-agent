@@ -4,50 +4,22 @@
 Reads a maintenance request CSV, applies the exception rules below, and
 prints a ranked review queue. The monitor is read-only: it flags requests
 for a person to review and never changes a priority, cost, or other field.
+Thresholds live in monitor_config.toml, not in this file.
 """
 
 import argparse
 import csv
 import re
 import sys
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 
-# --- Rule configuration ----------------------------------------------------
+DEFAULT_CONFIG_PATH = Path(__file__).with_name("monitor_config.toml")
 
 PRIORITIES = ["Low", "Medium", "High", "Emergency"]
 KNOWN_STATUSES = {"Open", "In Progress", "Pending Vendor", "On Hold", "Completed"}
-RESOLVED_STATUSES = {"Completed"}
-
-# Longest a request may stay unresolved, by priority.
-RESOLUTION_LIMITS = {
-    "Emergency": timedelta(hours=1),
-    "High": timedelta(hours=24),
-    "Medium": timedelta(hours=48),
-    "Low": timedelta(days=7),
-}
-
-# Longest a resident may go without an update, by priority.
-RESIDENT_UPDATE_LIMITS = {
-    "Emergency": timedelta(hours=2),
-    "High": timedelta(hours=24),
-    "Medium": timedelta(hours=48),
-    "Low": timedelta(days=7),
-}
-
-# How long an Emergency or High request may go without a confirmed vendor.
-DISPATCH_GRACE = {
-    "Emergency": timedelta(minutes=15),
-    "High": timedelta(hours=4),
-}
-
-HIGH_COST_THRESHOLD = 1000
-
-# A missing estimate is normal on a new request; flag it after this long.
-COST_ESTIMATE_GRACE = timedelta(hours=24)
-
-# A request this many times over its resolution limit escalates one level.
-ESCALATION_MULTIPLIER = 4
 
 # Values that look filled in but carry no information.
 PLACEHOLDERS = {"", "tbd", "n/a", "na", "none", "unknown", "pending", "-", "?"}
@@ -83,10 +55,79 @@ ROUTINE_ISSUE_PATTERNS = [
 ]
 
 SEVERITIES = ["low", "medium", "high", "critical"]
-RESOLUTION_SEVERITY = {"Emergency": "critical", "High": "high", "Medium": "medium", "Low": "low"}
+RESOLUTION_SEVERITY = {"High": "high", "Medium": "medium", "Low": "low"}
 UPDATE_SEVERITY = {"Emergency": "high", "High": "medium", "Medium": "low", "Low": "low"}
 
 TIME_FORMATS = ["%Y-%m-%d %H:%M", "%Y-%m-%d"]
+
+
+# --- Configuration ---------------------------------------------------------
+
+@dataclass
+class Config:
+    resolved_statuses: set
+    dispatch_grace: dict
+    emergency_response: timedelta
+    emergency_stalled_after: timedelta
+    emergency_long_running_review: timedelta
+    resolution_limits: dict
+    resident_update_limits: dict
+    high_cost_threshold: float
+    missing_estimate_grace: timedelta
+    resolution_multiplier: float
+
+
+class ConfigError(ValueError):
+    pass
+
+
+def load_config(path=DEFAULT_CONFIG_PATH):
+    """Load and validate thresholds from a TOML file."""
+    with open(path, "rb") as fh:
+        raw = tomllib.load(fh)
+
+    def section(name, keys):
+        values = raw.get(name)
+        if not isinstance(values, dict):
+            raise ConfigError(f"{path}: missing section [{name}]")
+        unknown = set(values) - set(keys)
+        if unknown:
+            raise ConfigError(f"{path}: unknown setting(s) in [{name}]: {', '.join(sorted(unknown))}")
+        for key in keys:
+            if key not in values:
+                raise ConfigError(f"{path}: missing setting '{key}' in [{name}]")
+        return values
+
+    def number(name, key, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ConfigError(f"{path}: [{name}] {key} must be a positive number, got {value!r}")
+        return value
+
+    def hours(name, keys):
+        values = section(name, keys)
+        return {k: timedelta(hours=number(name, k, values[k])) for k in keys}
+
+    resolved = section("statuses", ["resolved"])["resolved"]
+    if not resolved or not all(isinstance(s, str) and s.strip() for s in resolved):
+        raise ConfigError(f"{path}: [statuses] resolved must be a non-empty list of status names")
+    emergency = hours("emergency_hours", ["response", "stalled_after", "long_running_review"])
+    cost = section("cost", ["high_cost_threshold", "missing_estimate_grace_hours"])
+    escalation = section("escalation", ["resolution_multiplier"])
+
+    return Config(
+        resolved_statuses={s.strip() for s in resolved},
+        dispatch_grace=hours("dispatch_grace_hours", ["Emergency", "High"]),
+        emergency_response=emergency["response"],
+        emergency_stalled_after=emergency["stalled_after"],
+        emergency_long_running_review=emergency["long_running_review"],
+        resolution_limits=hours("resolution_limit_hours", ["High", "Medium", "Low"]),
+        resident_update_limits=hours("resident_update_limit_hours", PRIORITIES),
+        high_cost_threshold=number("cost", "high_cost_threshold", cost["high_cost_threshold"]),
+        missing_estimate_grace=timedelta(hours=number("cost", "missing_estimate_grace_hours",
+                                                      cost["missing_estimate_grace_hours"])),
+        resolution_multiplier=number("escalation", "resolution_multiplier",
+                                     escalation["resolution_multiplier"]),
+    )
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -153,10 +194,32 @@ def classify_issue(issue):
 
 # --- Rules -----------------------------------------------------------------
 
-def evaluate(row, now):
+def emergency_flags(age, last_progress, now, config):
+    """Stage checks for an unresolved Emergency: response, then active work,
+    then long-running review. Dispatch is checked separately."""
+    if last_progress is None:
+        if age > config.emergency_response:
+            return [Flag("NO_RESPONSE", "critical",
+                         f"No progress recorded {fmt_duration(age)} after the request "
+                         f"(limit {fmt_duration(config.emergency_response)}).")]
+        return []
+    idle = now - last_progress
+    if idle > config.emergency_stalled_after:
+        return [Flag("STALLED_PROGRESS", "high",
+                     f"Last progress {fmt_duration(idle)} ago (limit {fmt_duration(config.emergency_stalled_after)}); "
+                     f"emergency unresolved for {fmt_duration(age)}.")]
+    if age > config.emergency_long_running_review:
+        return [Flag("LONG_RUNNING_EMERGENCY", "medium",
+                     f"Work is active (last progress {fmt_duration(idle)} ago) but the emergency is "
+                     f"unresolved after {fmt_duration(age)} (review after "
+                     f"{fmt_duration(config.emergency_long_running_review)}).")]
+    return []
+
+
+def evaluate(row, now, config):
     """Return the list of Flags raised for one request row."""
     status = clean(row.get("status"))
-    if status in RESOLVED_STATUSES:
+    if status in config.resolved_statuses:
         return []
 
     flags = []
@@ -169,6 +232,7 @@ def evaluate(row, now):
     hold_reason = clean(row.get("hold_reason"))
     created, created_invalid = parse_time(row.get("created_at"))
     last_update, _ = parse_time(row.get("last_resident_update"))
+    last_progress, progress_invalid = parse_time(row.get("last_progress_at"))
     scheduled, _ = parse_time(row.get("scheduled_date"))
     hold_until, _ = parse_time(row.get("hold_until"))
     cost, cost_invalid = parse_cost(row.get("estimated_cost"))
@@ -191,7 +255,7 @@ def evaluate(row, now):
         blocking.append("created_at")
     if not status:
         blocking.append("status")
-    elif status not in KNOWN_STATUSES:
+    elif status not in KNOWN_STATUSES | config.resolved_statuses:
         blocking.append(f"status (invalid: {status!r})")
     if blocking:
         skipped = []
@@ -205,6 +269,8 @@ def evaluate(row, now):
         flags.append(Flag("MISSING_INFO", "medium", "No unit recorded (use 'Common Area' for shared spaces)."))
     if cost_invalid:
         flags.append(Flag("MISSING_INFO", "medium", f"Invalid estimated_cost: {row.get('estimated_cost')!r}."))
+    if progress_invalid:
+        flags.append(Flag("MISSING_INFO", "medium", f"Invalid last_progress_at: {row.get('last_progress_at')!r}."))
 
     age = now - created if created else None
 
@@ -224,7 +290,7 @@ def evaluate(row, now):
             paused = True
 
     # Emergency and High requests need a vendor who has confirmed.
-    grace = DISPATCH_GRACE.get(priority)
+    grace = config.dispatch_grace.get(priority)
     if grace and age is not None and age > grace and not paused and not (vendor and vendor_confirmed):
         severity = "critical" if priority == "Emergency" else "high"
         if vendor:
@@ -233,21 +299,29 @@ def evaluate(row, now):
             detail = f"No vendor assigned; {priority} request open {fmt_duration(age)}."
         flags.append(Flag("NO_CONFIRMED_DISPATCH", severity, detail))
 
-    # Resolution time limit by priority. A future appointment pauses the
-    # clock for Medium and Low requests only.
+    # Emergencies are checked by stage (response, active work, long-running);
+    # an emergency with a confirmed vendor actively working is not treated
+    # like an untouched one.
+    if priority == "Emergency" and age is not None:
+        flags.extend(emergency_flags(age, last_progress, now, config))
+
+    # Resolution time limit for other priorities. A future appointment pauses
+    # the clock for Medium and Low requests only.
     scheduled_ahead = scheduled is not None and scheduled > now and priority in ("Medium", "Low")
-    if priority and age is not None and not paused and not scheduled_ahead:
-        limit = RESOLUTION_LIMITS[priority]
+    if priority in config.resolution_limits and age is not None and not paused and not scheduled_ahead:
+        limit = config.resolution_limits[priority]
         if age > limit:
             severity = RESOLUTION_SEVERITY[priority]
-            if age > limit * ESCALATION_MULTIPLIER:
+            if age > limit * config.resolution_multiplier:
                 severity = escalate(severity)
             detail = f"{priority} request unresolved for {fmt_duration(age)} (limit {fmt_duration(limit)})."
             if scheduled is not None and scheduled <= now:
                 detail += f" Scheduled visit on {scheduled:%Y-%m-%d %H:%M} has passed."
             flags.append(Flag("OVER_TIME_LIMIT", severity, detail))
 
-    # Priority mismatch: flagged for review, never changed.
+    # Priority mismatch: flagged for review, never changed. The assigned
+    # priority still drives every other rule, so an Emergency label is
+    # always respected even when the issue text looks routine.
     kind = classify_issue(issue) if issue else None
     if kind == "urgent" and PRIORITIES.index(priority or "Low") <= PRIORITIES.index("Medium"):
         label = priority or "missing"
@@ -260,12 +334,13 @@ def evaluate(row, now):
                           "Confirm the priority; it has not been changed."))
 
     # Cost review. Never a reason to hold up emergency work.
-    if cost is not None and cost > HIGH_COST_THRESHOLD and not cost_approved:
-        detail = f"Estimate ${cost:,.0f} exceeds ${HIGH_COST_THRESHOLD:,} and is not approved. Needs human review."
+    if cost is not None and cost > config.high_cost_threshold and not cost_approved:
+        detail = (f"Estimate ${cost:,.0f} exceeds ${config.high_cost_threshold:,.0f} and is not approved. "
+                  "Needs human review.")
         if priority == "Emergency":
             detail += " Do not delay emergency work for approval."
         flags.append(Flag("HIGH_COST_REVIEW", "medium", detail))
-    elif cost is None and not cost_invalid and age is not None and age > COST_ESTIMATE_GRACE:
+    elif cost is None and not cost_invalid and age is not None and age > config.missing_estimate_grace:
         severity = "medium" if priority in ("High", "Emergency") else "low"
         flags.append(Flag("MISSING_INFO", severity,
                           f"No cost estimate after {fmt_duration(age)}; approval threshold can't be checked."))
@@ -273,7 +348,7 @@ def evaluate(row, now):
     # Resident updates. Staff-reported requests have no resident to update;
     # a blank reporter is treated as a resident to stay on the safe side.
     if reported_by != "staff" and priority and created:
-        limit = RESIDENT_UPDATE_LIMITS[priority]
+        limit = config.resident_update_limits[priority]
         since = now - max(created, last_update) if last_update else age
         if since > limit:
             if last_update:
@@ -298,11 +373,11 @@ def ranking_priority(row, flags):
     return PRIORITIES.index(priority) if priority in PRIORITIES else -1
 
 
-def build_queue(rows, now):
+def build_queue(rows, now, config):
     """Return [(row, flags)] for flagged requests, most urgent first."""
     queue = []
     for row in rows:
-        flags = evaluate(row, now)
+        flags = evaluate(row, now, config)
         if flags:
             flags.sort(key=lambda f: SEVERITIES.index(f.severity), reverse=True)
             queue.append((row, flags))
@@ -353,12 +428,19 @@ def main(argv=None):
     parser.add_argument("csv_path", nargs="?", default="maintenance_requests.csv")
     parser.add_argument("--as-of", help="evaluate as of this time (YYYY-MM-DD HH:MM); default is now")
     parser.add_argument("--output", help="also write one row per flag to this CSV file")
+    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH,
+                        help="threshold settings file (default: monitor_config.toml)")
     args = parser.parse_args(argv)
+
+    try:
+        config = load_config(args.config)
+    except (OSError, tomllib.TOMLDecodeError, ConfigError) as exc:
+        sys.exit(f"Config error: {exc}")
 
     now = datetime.strptime(args.as_of, "%Y-%m-%d %H:%M") if args.as_of else datetime.now()
     with open(args.csv_path, newline="") as fh:
         rows = list(csv.DictReader(fh))
-    queue = build_queue(rows, now)
+    queue = build_queue(rows, now, config)
     print_report(rows, queue, now)
     if args.output:
         write_flags_csv(queue, args.output)

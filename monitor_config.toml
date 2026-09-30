@@ -1,0 +1,50 @@
+# Thresholds for the maintenance exception monitor.
+#
+# Operations can change any value here and rerun the monitor; no code
+# changes are needed. Times are in hours (0.25 = 15 minutes, 168 = 7 days).
+# Every setting is required: the monitor stops with an error naming any
+# setting that is missing, misspelled, or not a positive number.
+
+[statuses]
+# Statuses that count as resolved. Any other status is unresolved.
+resolved = ["Completed"]
+
+[dispatch_grace_hours]
+# How long an Emergency or High request may go without a confirmed vendor.
+Emergency = 0.25
+High = 4
+
+[emergency_hours]
+# Emergencies are checked in stages instead of against one resolution limit.
+# Response: no progress recorded (vendor on site, work started) this long
+# after the request. Flagged as critical.
+response = 1
+# Stalled: progress was recorded, but nothing new for this long. Flagged as high.
+stalled_after = 4
+# Long-running: work is active but the emergency is still unresolved after
+# this long. Flagged as medium, for review rather than escalation.
+long_running_review = 24
+
+[resolution_limit_hours]
+# Longest a non-emergency request may stay unresolved.
+High = 24
+Medium = 48
+Low = 168
+
+[resident_update_limit_hours]
+# Longest a resident may go without an update. Staff-reported requests are skipped.
+Emergency = 2
+High = 24
+Medium = 48
+Low = 168
+
+[cost]
+# Unapproved estimates above this amount (USD) are flagged for human review.
+high_cost_threshold = 1000
+# A missing estimate is normal on a new request; flag it once the request is this old.
+missing_estimate_grace_hours = 24
+
+[escalation]
+# A non-emergency request this many times over its resolution limit is
+# raised one severity level.
+resolution_multiplier = 4
