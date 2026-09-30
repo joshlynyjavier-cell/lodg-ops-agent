@@ -19,3 +19,18 @@ Expectations were written and committed before the cases were run.
 | CH-06 | Resolved high-cost issue: completed $14,500 boiler replacement, cost never approved | Not flagged. Resolved requests are skipped by design. | Not flagged. **Design gap to note:** an unapproved $14,500 spend on completed work is invisible to the monitor. |
 | CH-07 | Missing critical data: no property or unit, priority "urgent", date in MM/DD/YYYY format, vendor "TBD" | High `MISSING_INFO` naming property, invalid priority "urgent" and invalid created_at. Medium `MISSING_INFO` for unit. `NEEDS_HUMAN_REVIEW` because "Ceiling fan" matches no category. No time-based flags. | Same as correct. Note: a US-format date is common in real exports, and it's treated as invalid rather than parsed. |
 | CH-08 | Overdue with a valid hold: Medium dishwasher repair open 10 days, on hold for a part until Oct 6, resident last updated 4 days ago | The hold pauses the time limit, so no `OVER_TIME_LIMIT`. The hold doesn't pause resident communication, so low `RESIDENT_UPDATE_OVERDUE`. | Same as correct. |
+
+## Results (run after the expectations above were committed)
+
+Five of 8 flagged: 2 critical, 1 high, 1 medium, 1 low. Every prediction matched the actual output, but two cases don't meet the correct behavior.
+
+| Case | Matches correct behavior? | Actual |
+|---|---|---|
+| CH-01 | **No** | Categorized as General maintenance. Critical dispatch and response flags fired (Emergency respected), but no escalation procedure, a false over-prioritization mismatch, and actions say "Assign maintenance staff" for water coming through a light fixture. |
+| CH-02 | Yes | Not flagged; categorized as flooding. |
+| CH-03 | Yes | Critical `NO_RESPONSE` naming HandyPro; medium mismatch; routine action withheld. |
+| CH-04 | **No** | Categorized as plumbing and **not flagged at all**. A possible gas leak labeled Low produced no output. |
+| CH-05 | Yes | `NEEDS_HUMAN_REVIEW` only. |
+| CH-06 | Yes (design gap) | Not flagged. The unapproved $14,500 cost on completed work is never surfaced. |
+| CH-07 | Yes | High `MISSING_INFO` (property, "urgent", MM/DD/YYYY date), unit missing, needs review. |
+| CH-08 | Yes | Hold paused the time limit; low `RESIDENT_UPDATE_OVERDUE` only. The appliance standard action includes a refrigerator sentence that doesn't apply to a dishwasher (not predicted). |
