@@ -1,0 +1,173 @@
+# =============================================================================
+# PROTOTYPE EXAMPLES ONLY.
+# The escalation procedures in this file are placeholders. Replace them with
+# company-approved procedures, contacts and jurisdiction-specific requirements
+# before any real-world use.
+#
+# The monitor only prints these steps for a human operator. It never calls
+# emergency services, vendors or residents, and never takes any action itself.
+# =============================================================================
+#
+# Issue categories for the maintenance exception monitor.
+#
+# Each category has:
+#   label        Name shown in the report.
+#   handling     "safety_critical": show the escalation procedure below.
+#                "human_review":    always send to a supervisor with the review guidance.
+#                "routine":         show the standard action.
+#   keywords     Phrases that identify the category. Matched as whole words,
+#                ignoring capitals.
+#   exclude      Optional. If any of these appear anywhere in the issue text,
+#                the category does not match.
+#   min_priority Safety-critical only: a lower priority is flagged as a mismatch.
+#   max_priority Routine, optional: a higher priority is flagged as a mismatch.
+#   vendor       Who to dispatch (not used for human_review).
+#   procedure / standard_action / review_guidance
+#                The steps for a person, depending on handling.
+#
+# How a category is chosen for an issue:
+#   1. Any safety-critical match wins. Two or more: all procedures shown, plus review.
+#   2. Otherwise a human_review match wins.
+#   3. Otherwise exactly one routine match is used.
+#   4. No match, or several routine matches: sent to human review. No guessing.
+
+# --- Safety-critical ----------------------------------------------------------
+
+[categories.gas]
+label = "Gas / suspected gas leak or carbon monoxide"
+handling = "safety_critical"
+min_priority = "Emergency"
+vendor = "a licensed gas technician"
+keywords = ["gas smell", "smell gas", "smells like gas", "gas leak", "gas odor", "rotten egg",
+            "carbon monoxide", "co alarm", "co detector"]
+procedure = [
+    "Confirm the resident has left the unit and was told not to use flames, light switches or electrical devices.",
+    "Confirm 911 and the gas utility's emergency line have been called. If not, the operator calls them.",
+    "Do not send maintenance staff in to investigate; wait for the utility or fire department to clear the unit.",
+    "Notify the property manager and on-call supervisor.",
+    "After clearance, dispatch a licensed gas technician.",
+]
+
+[categories.fire_smoke]
+label = "Fire / smoke"
+handling = "safety_critical"
+min_priority = "Emergency"
+vendor = "a fire damage restoration vendor"
+keywords = ["fire", "smoke", "flames", "burning smell"]
+exclude = ["chirp"]
+procedure = [
+    "Confirm 911 has been called and the building is being evacuated according to the fire plan.",
+    "Notify the property manager and on-call supervisor immediately.",
+    "Do not let anyone back in until the fire department clears the building.",
+    "After clearance, arrange a damage assessment and check whether residents need temporary housing.",
+]
+
+[categories.flooding_water]
+label = "Flooding / major water leak"
+handling = "safety_critical"
+min_priority = "Emergency"
+vendor = "an emergency plumber (or roofer for roof leaks) and a water-damage cleanup vendor"
+keywords = ["flooding", "flooded", "burst pipe", "water on floor", "overflowing", "roof leak",
+            "ceiling leak", "leaking to unit below", "standing water", "sewage"]
+procedure = [
+    "Shut off the water supply to the affected fixture, unit or riser.",
+    "If water is near outlets, fixtures or the electrical panel, keep people away and have power to the area shut off.",
+    "Dispatch an emergency plumber (or roofer for roof leaks) and a water-damage cleanup vendor.",
+    "Check the units below and next to it, and notify those residents.",
+    "Notify the property manager and photograph the damage for insurance.",
+]
+
+[categories.electrical_hazard]
+label = "Electrical hazard"
+handling = "safety_critical"
+min_priority = "Emergency"
+vendor = "a licensed electrician"
+keywords = ["sparking", "sparks", "exposed wire", "exposed wires", "exposed wiring",
+            "electrical shock", "shocked", "outlet smoking", "burning outlet"]
+procedure = [
+    "Tell the resident to stop using the outlet or fixture and keep away. If safe, shut off that circuit's breaker.",
+    "If there is smoke or burning, follow the fire / smoke procedure.",
+    "Dispatch a licensed electrician.",
+    "Notify the property manager.",
+]
+
+[categories.elevator]
+label = "Elevator"
+handling = "safety_critical"
+min_priority = "High"
+vendor = "the elevator service contractor"
+keywords = ["elevator"]
+procedure = [
+    "Confirm no one is trapped. If someone is, call the elevator company's emergency line (and 911 if there is a medical issue) and stay in contact with them.",
+    "Take the elevator out of service and post notices.",
+    "Dispatch the elevator service contractor.",
+    "Identify residents with mobility needs and arrange help.",
+    "Notify the property manager.",
+]
+
+[categories.structural_fall_hazard]
+label = "Structural damage / fall hazard"
+handling = "safety_critical"
+min_priority = "High"
+vendor = "a qualified contractor (and a licensed structural engineer for foundation or load-bearing damage)"
+keywords = ["railing", "handrail", "guardrail", "broken stair", "loose stair", "broken step",
+            "loose step", "foundation", "structural", "collapse", "collapsed", "collapsing",
+            "sagging ceiling", "sagging floor", "falling debris", "sinkhole", "trip hazard"]
+procedure = [
+    "Confirm the area is blocked off with a barrier or signage and affected residents are warned to stay clear.",
+    "If collapse may be imminent, confirm affected units or areas are evacuated. If anyone is injured, call 911.",
+    "Notify the property manager and on-call supervisor.",
+    "Dispatch a qualified contractor; for foundation or load-bearing damage, have a licensed structural engineer assess it before any repair.",
+    "Photograph the hazard, and ask the property manager whether the insurer needs to be notified.",
+]
+
+# --- Human review -------------------------------------------------------------
+
+[categories.mold_moisture]
+label = "Mold / moisture"
+handling = "human_review"
+keywords = ["mold", "mildew", "moisture", "damp", "musty", "condensation"]
+review_guidance = "Have a supervisor assess the extent, whether an active leak is causing it, and whether anyone in the unit has health concerns (for example respiratory conditions, young children or elderly residents). The supervisor decides the priority and whether a mold assessment or cleanup vendor is needed."
+
+# --- Routine ------------------------------------------------------------------
+
+[categories.hvac]
+label = "HVAC"
+handling = "routine"
+vendor = "an HVAC technician"
+keywords = ["ac", "a/c", "air conditioning", "air conditioner", "heat", "heating", "no heat",
+            "furnace", "hvac", "thermostat"]
+standard_action = "Dispatch an HVAC technician. With no heat in cold weather or no cooling in extreme heat, offer temporary heaters or fans, and have a supervisor consider raising the priority."
+
+[categories.plumbing]
+label = "Plumbing"
+handling = "routine"
+max_priority = "High"
+vendor = "a licensed plumber"
+keywords = ["faucet", "toilet", "sink", "pipe", "shower", "tub", "clogged", "water heater", "no hot water"]
+standard_action = "Dispatch a licensed plumber. If something is actively leaking, have the resident shut off the fixture's supply valve."
+
+[categories.appliance]
+label = "Appliance"
+handling = "routine"
+max_priority = "High"
+vendor = "an appliance repair vendor"
+keywords = ["refrigerator", "fridge", "dishwasher", "washer", "dryer", "oven", "stove", "microwave",
+            "garbage disposal"]
+standard_action = "Check for a warranty or service contract, then dispatch an appliance repair vendor. For a failed refrigerator, discuss food loss or a temporary replacement with the resident."
+
+[categories.access_lock]
+label = "Access / lock"
+handling = "routine"
+vendor = "a locksmith or maintenance staff"
+keywords = ["lock", "locked out", "lockout", "key", "entry door", "gate"]
+standard_action = "Dispatch a locksmith or maintenance staff. If an entry door or window can't be secured, arrange a temporary fix the same day."
+
+[categories.general_maintenance]
+label = "General maintenance"
+handling = "routine"
+max_priority = "Medium"
+vendor = "maintenance staff"
+keywords = ["lightbulb", "light bulb", "light fixture", "paint", "drywall", "carpet", "flooring",
+            "blinds", "cabinet", "drawer", "off track", "squeak", "caulk", "chirp", "chirping"]
+standard_action = "Schedule maintenance staff for the next available routine slot."

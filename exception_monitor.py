@@ -4,17 +4,22 @@
 Reads a maintenance request CSV, applies the exception rules below, and
 prints a ranked review queue. The monitor is read-only: it flags requests
 for a person to review and never changes a priority, cost, or other field.
-Thresholds live in monitor_config.toml, not in this file.
+Thresholds live in monitor_config.toml and issue categories (with their
+escalation procedures and standard actions) in issue_categories.toml.
+
+The monitor makes no external calls: it never contacts emergency services,
+vendors or residents. It only surfaces and prioritizes issues for a person.
 """
 
 import argparse
 import csv
-import re
 import sys
 import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from issue_categories import CategoryError, classify, load_categories
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("monitor_config.toml")
 
@@ -23,36 +28,6 @@ KNOWN_STATUSES = {"Open", "In Progress", "Pending Vendor", "On Hold", "Completed
 
 # Values that look filled in but carry no information.
 PLACEHOLDERS = {"", "tbd", "n/a", "na", "none", "unknown", "pending", "-", "?"}
-
-# Keyword signals for the priority-mismatch check. Matches are suggestions
-# for a reviewer, never grounds to change the priority automatically.
-URGENT_ISSUE_PATTERNS = [
-    r"\bgas\b.*\b(smell|leak|odou?r)\b",
-    r"\b(smell|odou?r) of gas\b",
-    r"carbon monoxide",
-    r"\bco (alarm|detector)\b",
-    r"\bfire\b",
-    r"\bsmoke\b(?!\s+detector)",
-    r"\bsparking\b",
-    r"\bburst pipe\b",
-    r"\bflooding\b",
-    r"\boverflowing\b",
-    r"\bsewage\b",
-    r"\bno heat\b",
-    r"\bexposed wir",
-    r"\bno (water|power|electricity)\b",
-]
-ROUTINE_ISSUE_PATTERNS = [
-    r"light ?bulb",
-    r"\bpaint",
-    r"\btouch-?up\b",
-    r"\bsqueak",
-    r"\bcabinet",
-    r"\bdrawer",
-    r"\bcosmetic",
-    r"\bchirp",
-    r"\bdrip",
-]
 
 SEVERITIES = ["low", "medium", "high", "critical"]
 RESOLUTION_SEVERITY = {"High": "high", "Medium": "medium", "Low": "low"}
@@ -184,34 +159,31 @@ def escalate(severity):
     return SEVERITIES[min(SEVERITIES.index(severity) + 1, len(SEVERITIES) - 1)]
 
 
-def classify_issue(issue):
-    text = issue.lower()
-    if any(re.search(p, text) for p in URGENT_ISSUE_PATTERNS):
-        return "urgent"
-    if any(re.search(p, text) for p in ROUTINE_ISSUE_PATTERNS):
-        return "routine"
-    return None
-
-
 # --- Rules -----------------------------------------------------------------
 
-def emergency_flags(age, last_progress, now, config):
+def procedure_first(category_match):
+    """Safety-critical issues start from the predefined escalation procedure."""
+    return "Follow the escalation procedure above. " if category_match.is_safety_critical else ""
+
+
+def emergency_flags(age, last_progress, now, config, category_match):
     """Stage checks for an unresolved Emergency: response, then active work,
     then long-running review. Dispatch is checked separately."""
+    first = procedure_first(category_match)
     if last_progress is None:
         if age > config.emergency_response:
             return [Flag("NO_RESPONSE", "critical",
                          f"No progress recorded {fmt_duration(age)} after the request "
                          f"(limit {fmt_duration(config.emergency_response)}).",
-                         "Call the vendor or on-call technician for an arrival time; escalate to the "
-                         "property manager if no one is on the way.")]
+                         first + "Call the assigned vendor or on-call technician for an arrival time; "
+                         "escalate to the property manager if no one is on the way.")]
         return []
     idle = now - last_progress
     if idle > config.emergency_stalled_after:
         return [Flag("STALLED_PROGRESS", "high",
                      f"Last progress {fmt_duration(idle)} ago (limit {fmt_duration(config.emergency_stalled_after)}); "
                      f"emergency unresolved for {fmt_duration(age)}.",
-                     "Contact the vendor for a status and next step; escalate to the property "
+                     first + "Contact the vendor for a status and next step; escalate to the property "
                      "manager if work has stopped.")]
     if age > config.emergency_long_running_review:
         return [Flag("LONG_RUNNING_EMERGENCY", "medium",
@@ -223,7 +195,7 @@ def emergency_flags(age, last_progress, now, config):
     return []
 
 
-def evaluate(row, now, config):
+def evaluate(row, now, config, categories):
     """Return the list of Flags raised for one request row."""
     status = clean(row.get("status"))
     if status in config.resolved_statuses:
@@ -243,6 +215,7 @@ def evaluate(row, now, config):
     scheduled, _ = parse_time(row.get("scheduled_date"))
     hold_until, _ = parse_time(row.get("hold_until"))
     cost, cost_invalid = parse_cost(row.get("estimated_cost"))
+    category_match = classify(issue, categories)
 
     # Missing information. Blocking fields switch other rules off, so they
     # are reported at high severity along with what can't be checked.
@@ -313,14 +286,17 @@ def evaluate(row, now, config):
             action = f"Call {vendor} to confirm dispatch; line up a backup vendor if they can't respond."
         else:
             detail = f"No vendor assigned; {priority} request open {fmt_duration(age)}."
-            action = "Assign a vendor and get confirmation of dispatch."
-        flags.append(Flag("NO_CONFIRMED_DISPATCH", severity, detail, action))
+            if category_match.vendor:
+                action = f"Assign {category_match.vendor} and get confirmation of dispatch."
+            else:
+                action = "Assign an appropriate vendor once a supervisor has reviewed the issue."
+        flags.append(Flag("NO_CONFIRMED_DISPATCH", severity, detail, procedure_first(category_match) + action))
 
     # Emergencies are checked by stage (response, active work, long-running);
     # an emergency with a confirmed vendor actively working is not treated
     # like an untouched one.
     if priority == "Emergency" and age is not None:
-        flags.extend(emergency_flags(age, last_progress, now, config))
+        flags.extend(emergency_flags(age, last_progress, now, config, category_match))
 
     # Resolution time limit for other priorities. A future appointment pauses
     # the clock for Medium and Low requests only.
@@ -336,21 +312,38 @@ def evaluate(row, now, config):
             if scheduled is not None and scheduled <= now:
                 detail += f" Scheduled visit on {scheduled:%Y-%m-%d %H:%M} has passed."
                 action = "Confirm whether the scheduled visit happened, and reschedule if it didn't."
-            flags.append(Flag("OVER_TIME_LIMIT", severity, detail, action))
+            flags.append(Flag("OVER_TIME_LIMIT", severity, detail, procedure_first(category_match) + action))
 
-    # Priority mismatch: flagged for review, never changed. The assigned
-    # priority still drives every other rule, so an Emergency label is
-    # always respected even when the issue text looks routine.
-    kind = classify_issue(issue) if issue else None
-    if kind == "urgent" and PRIORITIES.index(priority or "Low") <= PRIORITIES.index("Medium"):
-        label = priority or "missing"
-        flags.append(Flag("PRIORITY_MISMATCH", "critical",
-                          f"Issue suggests an urgent safety problem but priority is {label}.",
-                          "Have a supervisor review the priority now. The monitor has not changed it."))
-    elif kind == "routine" and priority in ("High", "Emergency"):
-        flags.append(Flag("PRIORITY_MISMATCH", "medium",
-                          f"Issue suggests routine work but priority is {priority}.",
-                          f"Have a supervisor review the priority. Until then it is handled as {priority}."))
+    # Priority mismatch, from the issue category's expected priority range.
+    # Flagged for review, never changed: the assigned priority still drives
+    # every other rule, so an Emergency label is always respected.
+    if issue:
+        minimums = [c.min_priority for c in category_match.categories if c.min_priority]
+        maximums = [c.max_priority for c in category_match.categories if c.max_priority]
+        rank = PRIORITIES.index(priority) if priority else -1
+        if minimums and rank < max(PRIORITIES.index(m) for m in minimums):
+            expected = max(minimums, key=PRIORITIES.index)
+            flags.append(Flag("PRIORITY_MISMATCH", "critical",
+                              f"Issue looks like {category_match.categories[0].label} (safety-critical, expected at "
+                              f"least {expected}) but priority is {priority or 'missing'}.",
+                              "Have a supervisor review the priority now. The monitor has not changed it."))
+        elif maximums and priority and rank > min(PRIORITIES.index(m) for m in maximums):
+            expected = min(maximums, key=PRIORITIES.index)
+            flags.append(Flag("PRIORITY_MISMATCH", "medium",
+                              f"Issue looks like {category_match.categories[0].label} (routine, usually at most "
+                              f"{expected}) but priority is {priority}.",
+                              f"Have a supervisor review the priority. Until then it is handled as {priority}."))
+
+    # Issues that can't be confidently categorized go to a person rather than
+    # getting a guessed category. A blank issue is already flagged above.
+    if issue and category_match.review_reason:
+        severity = "high" if len(category_match.categories) > 1 else "medium"
+        guidance = next((c.review_guidance for c in category_match.categories if c.review_guidance), "")
+        if category_match.is_safety_critical:
+            guidance = "Have a supervisor confirm which escalation procedure applies; all matching procedures are shown above."
+        flags.append(Flag("NEEDS_HUMAN_REVIEW", severity, category_match.review_reason,
+                          guidance or "Have a supervisor choose a category and how to handle it. "
+                                      "The monitor has not guessed."))
 
     # Cost review. Never a reason to hold up emergency work.
     if cost is not None and cost > config.high_cost_threshold and not cost_approved:
@@ -395,11 +388,11 @@ def ranking_priority(row, flags):
     return PRIORITIES.index(priority) if priority in PRIORITIES else -1
 
 
-def build_queue(rows, now, config):
+def build_queue(rows, now, config, categories):
     """Return [(row, flags)] for flagged requests, most urgent first."""
     queue = []
     for row in rows:
-        flags = evaluate(row, now, config)
+        flags = evaluate(row, now, config, categories)
         if flags:
             flags.sort(key=lambda f: SEVERITIES.index(f.severity), reverse=True)
             queue.append((row, flags))
@@ -417,34 +410,65 @@ def build_queue(rows, now, config):
 
 # --- Output ----------------------------------------------------------------
 
-def print_report(rows, queue, now, out=sys.stdout):
+PROTOTYPE_NOTICE = ("PROTOTYPE: escalation procedures are examples only and must be replaced with "
+                    "company-approved procedures, contacts and jurisdiction-specific requirements "
+                    "before real-world use.")
+
+
+def category_lines(category_match):
+    """Report lines describing how the issue's category says to handle it."""
+    lines = []
+    if not category_match.categories:
+        lines.append("  Category: not recognized - needs human review")
+    for c in category_match.categories:
+        tag = {"safety_critical": "safety-critical", "human_review": "needs human review"}.get(c.handling, "routine")
+        lines.append(f"  Category: {c.label} ({tag})")
+        if c.procedure:
+            lines.append("  Escalation procedure (PROTOTYPE EXAMPLE - not approved for real-world use):")
+            lines.extend(f"    - {step}" for step in c.procedure)
+        if c.standard_action:
+            lines.append(f"  Standard action: {c.standard_action}")
+    if category_match.also_matched:
+        lines.append("  Also mentions: " + ", ".join(c.label for c in category_match.also_matched))
+    return lines
+
+
+def category_label(category_match):
+    return ", ".join(c.label for c in category_match.categories) or "Uncategorized"
+
+
+def print_report(rows, queue, now, categories, out=sys.stdout):
     counts = {s: 0 for s in SEVERITIES}
     for _, flags in queue:
         counts[SEVERITIES[top_severity(flags)]] += 1
     print(f"Maintenance exception report - as of {now:%Y-%m-%d %H:%M}", file=out)
     print(f"{len(rows)} requests checked, {len(queue)} need attention: "
           + ", ".join(f"{counts[s]} {s}" for s in reversed(SEVERITIES)), file=out)
-    print("Nothing below has been changed. Each item needs a person to review and decide.", file=out)
+    print("Nothing below has been changed or acted on. Each item needs a person to review and decide.", file=out)
+    print(PROTOTYPE_NOTICE, file=out)
     for row, flags in queue:
         where = ", ".join(v for v in (row.get("property"), row.get("unit")) if clean(v))
         print(f"\n[{SEVERITIES[top_severity(flags)].upper()}] {row['request_id']}", file=out)
         print(f"  Property: {where or '(missing)'}", file=out)
         print(f"  Issue:    {clean(row.get('issue')) or '(missing)'}", file=out)
         print(f"  Priority: {clean(row.get('priority')) or '(missing)'}", file=out)
+        for line in category_lines(classify(clean(row.get("issue")), categories)):
+            print(line, file=out)
         for i, f in enumerate(flags, 1):
             print(f"  {i}. Reason ({f.severity}): {f.detail}", file=out)
             print(f"     Next action: {f.action}", file=out)
 
 
-def write_flags_csv(queue, path):
+def write_flags_csv(queue, path, categories):
     with open(path, "w", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["request_id", "property", "unit", "issue", "priority", "status",
+        writer.writerow(["request_id", "property", "unit", "issue", "category", "priority", "status",
                          "severity", "rule", "reason", "recommended_action"])
         for row, flags in queue:
+            category = category_label(classify(clean(row.get("issue")), categories))
             for f in flags:
                 writer.writerow([row["request_id"], row.get("property", ""), row.get("unit", ""),
-                                 row.get("issue", ""), row.get("priority", ""), row.get("status", ""),
+                                 row.get("issue", ""), category, row.get("priority", ""), row.get("status", ""),
                                  f.severity, f.rule, f.detail, f.action])
 
 
@@ -455,20 +479,23 @@ def main(argv=None):
     parser.add_argument("--output", help="also write one row per flag to this CSV file")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH,
                         help="threshold settings file (default: monitor_config.toml)")
+    parser.add_argument("--categories", default=None,
+                        help="issue categories file (default: issue_categories.toml)")
     args = parser.parse_args(argv)
 
     try:
         config = load_config(args.config)
-    except (OSError, tomllib.TOMLDecodeError, ConfigError) as exc:
+        categories = load_categories(args.categories) if args.categories else load_categories()
+    except (OSError, tomllib.TOMLDecodeError, ConfigError, CategoryError) as exc:
         sys.exit(f"Config error: {exc}")
 
     now = datetime.strptime(args.as_of, "%Y-%m-%d %H:%M") if args.as_of else datetime.now()
     with open(args.csv_path, newline="") as fh:
         rows = list(csv.DictReader(fh))
-    queue = build_queue(rows, now, config)
-    print_report(rows, queue, now)
+    queue = build_queue(rows, now, config, categories)
+    print_report(rows, queue, now, categories)
     if args.output:
-        write_flags_csv(queue, args.output)
+        write_flags_csv(queue, args.output, categories)
 
 
 if __name__ == "__main__":
