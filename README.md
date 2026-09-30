@@ -85,3 +85,4 @@ Python 3.11+, standard library only.
 | `challenge_cases.csv`, `CHALLENGE_TESTS.md` | 8 adversarial cases, with predictions written before running and the results |
 | `test_exception_monitor.py` | 85 automated tests |
 | `docs/technical_reference.md` | Full rule and configuration reference |
+| `docs/demo.html` | One-page visual summary for demos (static, no dependencies beyond web fonts) |

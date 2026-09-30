@@ -1,0 +1,304 @@
+<title>Maintenance Exception Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Public+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+  /* Layout: one centered reading column (~1000px); a work-order feel with mono ticket IDs and severity stripes. */
+  :root {
+    --bg: #f5f7f8;
+    --surface: #ffffff;
+    --ink: #17232b;
+    --muted: #56656f;
+    --line: #dbe2e6;
+    --accent: #1f5f6b;
+    --accent-soft: #e3eff1;
+    --crit: #b3261e;
+    --crit-soft: #fbe9e7;
+    --high: #9a5b00;
+    --high-soft: #fdf0dc;
+    --med: #4b5b66;
+    --med-soft: #e9eef1;
+    --notice: #fff7e0;
+    --notice-line: #e8cf85;
+    --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --font-body: "Public Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10171b; --surface: #172127; --ink: #e6edf0; --muted: #9aabb4; --line: #2a3840;
+      --accent: #7cc4cf; --accent-soft: #1b3439;
+      --crit: #ff8a80; --crit-soft: #3a1d1b; --high: #f2b35c; --high-soft: #372a15;
+      --med: #b4c2ca; --med-soft: #25323a; --notice: #2c2715; --notice-line: #6b5a24;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10171b; --surface: #172127; --ink: #e6edf0; --muted: #9aabb4; --line: #2a3840;
+    --accent: #7cc4cf; --accent-soft: #1b3439;
+    --crit: #ff8a80; --crit-soft: #3a1d1b; --high: #f2b35c; --high-soft: #372a15;
+    --med: #b4c2ca; --med-soft: #25323a; --notice: #2c2715; --notice-line: #6b5a24;
+    color-scheme: dark;
+  }
+
+  body { background: var(--bg); color: var(--ink); font: 400 1rem/1.6 var(--font-body); }
+  .page { max-width: 64rem; margin: 0 auto; padding-inline: 1.25rem; padding-block: 2.5rem 3rem; display: grid; gap: 3rem; }
+  h1, h2 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+  h1 { font-size: clamp(2rem, 5vw, 2.75rem); font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 1.375rem; font-weight: 600; }
+  p { margin: 0; }
+  .eyebrow { font: 600 0.75rem/1 var(--font-body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--font-mono); font-size: 0.85em; }
+  section { display: grid; gap: 1.25rem; min-width: 0; }
+  .section-head { display: grid; gap: 0.4rem; }
+  .section-head p { max-width: 65ch; color: var(--muted); }
+
+  /* Header */
+  header { display: grid; gap: 1rem; }
+  .lede { font-size: 1.125rem; max-width: 62ch; }
+  .notice { display: flex; flex-wrap: wrap; gap: 0.35rem 1.25rem; align-items: baseline; background: var(--notice);
+    border: 1px solid var(--notice-line); border-radius: 0.5rem; padding: 0.75rem 1rem; font-size: 0.9rem; }
+  .notice strong { font-weight: 600; }
+
+  /* Flow */
+  .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: stretch; gap: 0.75rem; }
+  .step { background: var(--surface); border: 1px solid var(--line); border-radius: 0.625rem; padding: 1.1rem 1.2rem; display: grid; gap: 0.45rem; align-content: start; min-width: 0; }
+  .step.final { border-color: var(--accent); background: var(--accent-soft); }
+  .step h3 { margin: 0; font: 600 1.05rem/1.3 var(--font-display); }
+  .step .figure { font: 600 0.8rem/1 var(--font-mono); color: var(--accent); }
+  .step ul { margin: 0; padding-left: 1.1rem; color: var(--muted); font-size: 0.9rem; display: grid; gap: 0.2rem; }
+  .arrow { align-self: center; color: var(--muted); font-size: 1.5rem; line-height: 1; }
+  .sla { font-size: 0.85rem; color: var(--muted); }
+  .sla .mono { color: var(--ink); }
+
+  /* Metrics */
+  .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; }
+  .metric { background: var(--surface); border: 1px solid var(--line); border-radius: 0.625rem; padding: 1rem 1.1rem; display: grid; gap: 0.2rem; }
+  .metric .value { font: 700 2rem/1.1 var(--font-display); font-variant-numeric: tabular-nums; }
+  .metric .label { font-size: 0.9rem; color: var(--muted); }
+  .metric.crit .value { color: var(--crit); }
+  .reasons { background: var(--surface); border: 1px solid var(--line); border-radius: 0.625rem; padding: 1.1rem 1.2rem; display: grid; gap: 0.6rem; }
+  .reasons h3 { margin: 0; font: 600 0.95rem/1.3 var(--font-body); }
+  .bar-row { display: grid; grid-template-columns: minmax(9rem, 14rem) 1fr 2rem; gap: 0.75rem; align-items: center; font-size: 0.9rem; }
+  .bar { height: 0.55rem; background: var(--med-soft); border-radius: 999px; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+  .bar-row .n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  /* Queue table */
+  .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 0.625rem; }
+  table { width: 100%; border-collapse: collapse; min-width: 52rem; font-size: 0.9rem; }
+  th { text-align: left; font: 600 0.72rem/1.2 var(--font-body); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+    padding: 0.75rem 0.9rem; border-bottom: 1px solid var(--line); background: var(--bg); }
+  td { padding: 0.85rem 0.9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { box-shadow: inset 3px 0 0 var(--sev, transparent); }
+  tr.critical { --sev: var(--crit); }
+  tr.high { --sev: var(--high); }
+  .req { display: grid; gap: 0.2rem; }
+  .req .issue { font-weight: 600; }
+  .req .where { color: var(--muted); font-size: 0.85rem; }
+  .tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.2rem; }
+  .tag { font-size: 0.72rem; font-weight: 600; padding: 0.1rem 0.45rem; border-radius: 0.3rem; background: var(--med-soft); color: var(--med); white-space: nowrap; }
+  .tag.safety { background: var(--crit-soft); color: var(--crit); }
+  .pill { display: inline-block; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 0.2rem 0.5rem; border-radius: 999px; white-space: nowrap; }
+  .pill.critical { background: var(--crit-soft); color: var(--crit); }
+  .pill.high { background: var(--high-soft); color: var(--high); }
+  .more { display: block; margin-top: 0.3rem; color: var(--muted); font-size: 0.8rem; }
+  .table-note { font-size: 0.85rem; color: var(--muted); }
+
+  /* Guardrails and next steps */
+  .guardrails { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 2rem; margin: 0; padding: 0; list-style: none; }
+  .guardrails li { display: grid; gap: 0.15rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+  .guardrails strong { font-weight: 600; }
+  .guardrails span { color: var(--muted); font-size: 0.925rem; }
+  .next { margin: 0; padding-left: 1.4rem; display: grid; gap: 0.6rem; max-width: 70ch; }
+  .next li::marker { color: var(--accent); font-weight: 600; }
+  .next strong { font-weight: 600; }
+
+  footer { border-top: 1px solid var(--line); padding-top: 1.25rem; font-size: 0.85rem; color: var(--muted); display: grid; gap: 0.35rem; }
+
+  @media (max-width: 760px) {
+    .flow { grid-template-columns: 1fr; }
+    .arrow { justify-self: center; transform: rotate(90deg); }
+    .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .guardrails { grid-template-columns: 1fr; }
+    .bar-row { grid-template-columns: minmax(0, 1fr) 5rem 1.5rem; }
+  }
+</style>
+
+<main class="page">
+  <header>
+    <span class="eyebrow">Operations prototype · V1</span>
+    <h1>Maintenance Exception Monitor</h1>
+    <p class="lede">Property teams manage long queues of open maintenance requests. The expensive failures hide inside them: an emergency nobody dispatched, a vendor who never arrived, a resident left without updates, a repair nobody approved, or a gas smell logged as Low priority. This prototype finds those exceptions and hands a ranked list to a person to act on.</p>
+    <div class="notice" role="note">
+      <span><strong>Synthetic data.</strong> All 25 requests are fictional.</span>
+      <span><strong>Prototype assumptions.</strong> Thresholds, categories and safety procedures are illustrative, not Lodg policies.</span>
+    </div>
+  </header>
+
+  <section aria-labelledby="flow-title">
+    <div class="section-head">
+      <span class="eyebrow">How it works</span>
+      <h2 id="flow-title">From request queue to prioritized review</h2>
+    </div>
+    <div class="flow">
+      <div class="step">
+        <span class="figure">25 requests · 5 properties</span>
+        <h3>Maintenance requests</h3>
+        <ul>
+          <li>Work-order export (CSV)</li>
+          <li>Priority, status, vendor, cost</li>
+          <li>Resident updates and progress times</li>
+        </ul>
+      </div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="step">
+        <span class="figure">Rules-based · no AI in the loop</span>
+        <h3>Exception monitoring</h3>
+        <ul>
+          <li>Hazard screen, then issue category</li>
+          <li>Dispatch, response and time limits</li>
+          <li>Resident updates, cost, missing data</li>
+          <li>Priority mismatch checks</li>
+        </ul>
+      </div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="step final">
+        <span class="figure">20 flagged · ranked</span>
+        <h3>Prioritized human review</h3>
+        <ul>
+          <li>Critical first, then priority and age</li>
+          <li>Reason and next action for each flag</li>
+          <li>Nothing is changed or acted on</li>
+        </ul>
+      </div>
+    </div>
+    <p class="sla">Prototype time limits (assumptions, not Lodg SLAs): Emergency response <span class="mono">1 h</span> · resolution High <span class="mono">24 h</span>, Medium <span class="mono">48 h</span>, Low <span class="mono">7 d</span> · unapproved estimates over <span class="mono">$1,000</span> go to review.</p>
+  </section>
+
+  <section aria-labelledby="metrics-title">
+    <div class="section-head">
+      <span class="eyebrow">Synthetic dataset results</span>
+      <h2 id="metrics-title">What the monitor found</h2>
+      <p>Snapshot as of <span class="mono">2026-09-30 09:00</span>. The sample was built to be messy, so most requests have at least one problem.</p>
+    </div>
+    <div class="metrics">
+      <div class="metric"><span class="value">25</span><span class="label">requests checked</span></div>
+      <div class="metric"><span class="value">20</span><span class="label">need attention</span></div>
+      <div class="metric crit"><span class="value">11</span><span class="label">critical (7 high, 2 medium)</span></div>
+      <div class="metric"><span class="value">8</span><span class="label">flagged requests in a safety-critical category</span></div>
+    </div>
+    <div class="reasons">
+      <h3>Most common reasons (53 across 20 requests)</h3>
+      <div class="bar-row"><span>Resident update overdue</span><div class="bar"><span style="width:100%"></span></div><span class="n">13</span></div>
+      <div class="bar-row"><span>No confirmed vendor</span><div class="bar"><span style="width:69.2%"></span></div><span class="n">9</span></div>
+      <div class="bar-row"><span>Over time limit</span><div class="bar"><span style="width:61.5%"></span></div><span class="n">8</span></div>
+      <div class="bar-row"><span>Unapproved cost over $1,000</span><div class="bar"><span style="width:46.2%"></span></div><span class="n">6</span></div>
+      <div class="bar-row"><span>Emergency with no response</span><div class="bar"><span style="width:38.5%"></span></div><span class="n">5</span></div>
+      <div class="bar-row"><span>Missing or invalid data</span><div class="bar"><span style="width:38.5%"></span></div><span class="n">5</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="queue-title">
+    <div class="section-head">
+      <span class="eyebrow">Review queue</span>
+      <h2 id="queue-title">Highest-priority flagged requests</h2>
+      <p>The top 8 of 20, in the order the monitor ranks them. Each shows its main reason; the full report lists every reason with its own next action.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th scope="col">Request</th><th scope="col">Severity</th><th scope="col">Why it was flagged</th><th scope="col">Recommended next action</th></tr>
+        </thead>
+        <tbody>
+          <tr class="critical">
+            <td><div class="req"><span class="mono">MR-1022</span><span class="issue">No heat, furnace failure</span><span class="where">Pine Ridge Townhomes, 14</span><div class="tags"><span class="tag">Emergency</span><span class="tag">HVAC</span></div></div></td>
+            <td><span class="pill critical">Critical</span></td>
+            <td>CoolAir HVAC assigned but hasn't confirmed; no progress 2d 12h after the request (limit 1 h).<span class="more">+2 more: resident update overdue, $3,900 estimate unapproved</span></td>
+            <td>Call CoolAir HVAC to confirm dispatch and get an arrival time; line up a backup vendor if they can't respond.</td>
+          </tr>
+          <tr class="critical">
+            <td><div class="req"><span class="mono">MR-1004</span><span class="issue">Gas smell reported near stove</span><span class="where">Maple Court Apartments, 3D</span><div class="tags"><span class="tag">Emergency</span><span class="tag safety">Gas · safety-critical</span></div></div></td>
+            <td><span class="pill critical">Critical</span></td>
+            <td>No vendor assigned and no response 10h 20m after the request.<span class="more">+1 more: resident update overdue</span></td>
+            <td>Follow the gas escalation procedure. Escalate to the property manager and assign a licensed gas technician.</td>
+          </tr>
+          <tr class="critical">
+            <td><div class="req"><span class="mono">MR-1017</span><span class="issue">Toilet overflowing into unit below</span><span class="where">Harbor View Residences, 802</span><div class="tags"><span class="tag">Emergency</span><span class="tag safety">Flooding · safety-critical</span></div></div></td>
+            <td><span class="pill critical">Critical</span></td>
+            <td>No vendor and no response 6h 50m after the request.<span class="more">+1 more: resident never updated</span></td>
+            <td>Follow the flooding procedure. Escalate to the property manager; assign an emergency plumber and a water-damage cleanup vendor.</td>
+          </tr>
+          <tr class="critical">
+            <td><div class="req"><span class="mono">MR-1001</span><span class="issue">Burst pipe, water on floor</span><span class="where">Maple Court Apartments, 2B</span><div class="tags"><span class="tag">Emergency</span><span class="tag safety">Flooding · safety-critical</span></div></div></td>
+            <td><span class="pill critical">Critical</span></td>
+            <td>No vendor and no response 2h 45m after the request.<span class="more">+1 more: resident never updated</span></td>
+            <td>Follow the flooding procedure. Escalate to the property manager; assign an emergency plumber and a water-damage cleanup vendor.</td>
+          </tr>
+          <tr class="critical">
+            <td><div class="req"><span class="mono">MR-1023</span><span class="issue">Carbon monoxide alarm going off</span><span class="where">Pine Ridge Townhomes, 31</span><div class="tags"><span class="tag">Low</span><span class="tag safety">Gas / CO · safety-critical</span></div></div></td>
+            <td><span class="pill critical">Critical</span></td>
+            <td>Safety-critical issue labeled Low; expected at least Emergency.</td>
+            <td>Have a supervisor review the priority now. The monitor has not changed it.</td>
+          </tr>
+          <tr class="critical">
+            <td><div class="req"><span class="mono">MR-1021</span><span class="issue">Replace burned-out lightbulb</span><span class="where">Pine Ridge Townhomes, 22</span><div class="tags"><span class="tag">Emergency</span><span class="tag">General maintenance</span></div></div></td>
+            <td><span class="pill critical">Critical</span></td>
+            <td>No progress 16h after an Emergency request. The label also looks too high for routine work.<span class="more">+1 more: resident update overdue</span></td>
+            <td>Call HandyPro Maintenance for an arrival time. A supervisor reviews the priority; it stays Emergency until then.</td>
+          </tr>
+          <tr class="critical">
+            <td><div class="req"><span class="mono">MR-1015</span><span class="issue">Foundation crack in exterior wall</span><span class="where">Oakwood Terrace, 9</span><div class="tags"><span class="tag">High</span><span class="tag safety">Structural · safety-critical</span></div></div></td>
+            <td><span class="pill critical">Critical</span></td>
+            <td>Unresolved for 69 days with no vendor; on hold without a reason or end date.<span class="more">+1 more: $18,500 estimate unapproved</span></td>
+            <td>Follow the structural procedure. Escalate; assign a qualified contractor and a structural engineer.</td>
+          </tr>
+          <tr class="critical">
+            <td><div class="req"><span class="mono">MR-1009</span><span class="issue">Mold spreading on bathroom ceiling</span><span class="where">Riverside Lofts, 412</span><div class="tags"><span class="tag">High</span><span class="tag">Mold · human review</span></div></div></td>
+            <td><span class="pill critical">Critical</span></td>
+            <td>Unresolved for 42 days with no vendor. Mold severity needs a person's judgment.<span class="more">+2 more: resident not updated in 40 days, $3,200 estimate unapproved</span></td>
+            <td>Supervisor assesses extent, leak source and residents' health concerns, then assigns the right vendor.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="table-note">Escalation procedures referenced above are prototype examples and would be replaced with company-approved procedures before any real use.</p>
+  </section>
+
+  <section aria-labelledby="guardrails-title">
+    <div class="section-head">
+      <span class="eyebrow">Human in the loop</span>
+      <h2 id="guardrails-title">Guardrails</h2>
+      <p>The monitor surfaces and ranks exceptions. People make every operational decision.</p>
+    </div>
+    <ul class="guardrails">
+      <li><strong>Read-only</strong><span>Changes no data and makes no calls to vendors, residents or emergency services. A test enforces no network access.</span></li>
+      <li><strong>Priorities are never changed</strong><span>Mismatches go to a supervisor. An assigned Emergency is always handled as an Emergency.</span></li>
+      <li><strong>Predefined safety procedures</strong><span>Gas, fire, flooding, electrical, elevator and structural issues show fixed steps written in advance, never generated.</span></li>
+      <li><strong>Hazard words beat routine matches</strong><span>If a request mentions smell, smoke, sparking or pouring water without a confirmed safety category, a person reviews it.</span></li>
+      <li><strong>No guessing</strong><span>Unfamiliar, ambiguous, mold and pest issues are sent for review instead of being assigned a category.</span></li>
+      <li><strong>Tested against failure</strong><span>Eight adversarial cases, one of which caught a probable gas leak misfiled as plumbing. Fixed, and now a regression test.</span></li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="next-title">
+    <div class="section-head">
+      <span class="eyebrow">Roadmap</span>
+      <h2 id="next-title">What I'd build next</h2>
+    </div>
+    <ol class="next">
+      <li><strong>Validate with the operations team.</strong> Real thresholds, safety procedures reviewed by safety and legal, and a trial on a week of anonymized tickets.</li>
+      <li><strong>Read-only integration.</strong> Pull from the work-order system and send a daily digest to the ops channel. People still take every action.</li>
+      <li><strong>Alert state.</strong> Acknowledge and snooze flags, suppress repeats, and measure time-to-resolution for flagged items.</li>
+      <li><strong>Duplicate and repeat-problem detection.</strong> Spot the same unit and issue reported again.</li>
+      <li><strong>AI-assisted categorization.</strong> Suggestions a person confirms, for wording the keywords miss, measured against the challenge suite. Safety procedures stay predefined.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <p>Synthetic data only. All thresholds, categories and escalation procedures are prototype assumptions, not Lodg policies.</p>
+    <p>Built with Python 3.11 standard library · 85 automated tests · V1 frozen.</p>
+  </footer>
+</main>
