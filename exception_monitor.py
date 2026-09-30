@@ -501,12 +501,13 @@ def category_label(category_match):
     return ", ".join(c.label for c in category_match.categories) or "Uncategorized"
 
 
-def print_report(rows, queue, now, categories, financial=(), out=sys.stdout):
+def print_report(rows, queue, now, categories, financial=None, out=sys.stdout):
     counts = {s: 0 for s in SEVERITIES}
     for _, flags in queue:
         counts[SEVERITIES[top_severity(flags)]] += 1
     print(f"Maintenance exception report - as of {now:%Y-%m-%d %H:%M}", file=out)
-    print(f"{len(rows)} requests checked, {len(queue)} need attention: "
+    print(f"{len(rows)} request{'' if len(rows) == 1 else 's'} checked, {len(queue)} need"
+          f"{'s' if len(queue) == 1 else ''} attention: "
           + ", ".join(f"{counts[s]} {s}" for s in reversed(SEVERITIES)), file=out)
     print("Nothing below has been changed or acted on. Each item needs a person to review and decide.", file=out)
     print(PROTOTYPE_NOTICE, file=out)
@@ -522,6 +523,8 @@ def print_report(rows, queue, now, categories, financial=(), out=sys.stdout):
             print(f"  {i}. Reason ({f.severity}): {f.detail}", file=out)
             print(f"     Next action: {f.action}", file=out)
 
+    if financial is None:
+        return
     print(f"\n=== Financial review: completed work ({len(financial)}) ===", file=out)
     print("Financial oversight only. These are not active maintenance issues.", file=out)
     if not financial:

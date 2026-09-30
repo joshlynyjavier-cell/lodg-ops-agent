@@ -9,6 +9,7 @@ from pathlib import Path
 from exception_monitor import (DEFAULT_CONFIG_PATH, ConfigError, build_financial_review, build_queue,
                                category_lines, evaluate, load_config, print_report, write_flags_csv)
 from issue_categories import DEFAULT_CATEGORIES_PATH, CategoryError, classify, load_categories
+from todays_exceptions import exception_line, headline_flag, render_today
 
 NOW = datetime(2026, 9, 30, 9, 0)
 CONFIG = load_config()
@@ -436,6 +437,54 @@ class ChallengeCaseTests(unittest.TestCase):
         self.assertEqual(self.flags["CH-08"], {("RESIDENT_UPDATE_OVERDUE", "low")})
 
 
+class TodaysExceptionsTests(unittest.TestCase):
+    """The concise view is presentation only, on top of the unchanged V1 queue."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(Path(__file__).with_name("maintenance_requests.csv"), newline="") as fh:
+            cls.rows = list(csv.DictReader(fh))
+        cls.queue = build_queue(cls.rows, NOW, CONFIG, CATEGORIES)
+        cls.text = render_today(cls.queue, NOW)
+        cls.lines = {row["request_id"]: exception_line(row, flags, NOW) for row, flags in cls.queue}
+
+    def test_header_counts_match_v1_severities(self):
+        self.assertIn("20 requests need attention   🔴 11 Critical   🟠 7 High   🟡 2 Medium", self.text)
+
+    def test_marks_data_as_synthetic(self):
+        self.assertIn("SYNTHETIC DATA", self.text)
+
+    def test_one_line_per_exception_in_v1_order(self):
+        ids = [line.split(" ")[1] for line in self.text.splitlines() if line[:1] in "🔴🟠🟡⚪" and " · " in line]
+        self.assertEqual(ids, [row["request_id"] for row, _ in self.queue])
+
+    def test_only_unresolved_exceptions_are_listed(self):
+        for request_id in ("MR-1010", "MR-1018", "MR-1002", "MR-1008", "MR-1014"):
+            self.assertNotIn(request_id, self.text)
+
+    def test_headline_is_the_most_useful_reason(self):
+        self.assertIn("CoolAir HVAC hasn't confirmed", self.lines["MR-1022"])
+        self.assertIn("No vendor assigned", self.lines["MR-1004"])
+        self.assertIn("Possible safety issue labeled Low", self.lines["MR-1023"])
+        self.assertIn("Work stalled — last progress 23 hrs ago", self.lines["MR-1016"])
+        self.assertIn("Missing: unit", self.lines["MR-1005"])
+        self.assertIn("open time unknown", self.lines["MR-1013"])
+
+    def test_headline_is_one_of_the_v1_flags_at_top_severity(self):
+        for _, flags in self.queue:
+            chosen = headline_flag(flags)
+            self.assertIn(chosen, flags)
+            self.assertEqual(chosen.severity, flags[0].severity)
+
+    def test_other_reasons_are_counted_not_hidden(self):
+        self.assertTrue(self.lines["MR-1022"].endswith("(+3 more)"))
+        self.assertIn("--details", self.text)
+
+    def test_view_does_not_change_v1_results(self):
+        again = build_queue(self.rows, NOW, CONFIG, CATEGORIES)
+        self.assertEqual([(r["request_id"], f) for r, f in again], [(r["request_id"], f) for r, f in self.queue])
+
+
 class NoExternalActionsTests(unittest.TestCase):
     """The prototype only surfaces issues; it must not contact anyone or anything."""
 
@@ -443,7 +492,7 @@ class NoExternalActionsTests(unittest.TestCase):
                        "telnetlib", "subprocess", "webbrowser", "xmlrpc"}
 
     def test_no_network_or_process_imports(self):
-        for name in ("exception_monitor.py", "issue_categories.py"):
+        for name in ("exception_monitor.py", "issue_categories.py", "todays_exceptions.py"):
             tree = ast.parse(Path(__file__).with_name(name).read_text())
             imported = set()
             for node in ast.walk(tree):

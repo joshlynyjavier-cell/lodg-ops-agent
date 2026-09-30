@@ -15,9 +15,23 @@ It **surfaces and prioritizes; it never acts.** It doesn't contact vendors, resi
 On the 25 sample requests, which are deliberately messy, it flags 20. The four emergencies nobody has responded to come first, followed by a carbon monoxide alarm mislabeled as Low.
 
 ```
-python3 exception_monitor.py --as-of "2026-09-30 09:00"   # sample data is built around this time
-python3 -m unittest test_exception_monitor                # 85 tests
+python3 todays_exceptions.py --as-of "2026-09-30 09:00"                    # Today's Exceptions: one line per request
+python3 todays_exceptions.py --as-of "2026-09-30 09:00" --request MR-1004  # full triggers and actions for one request
+python3 exception_monitor.py --as-of "2026-09-30 09:00"                    # full report (sample data is built around this time)
+python3 -m unittest test_exception_monitor                                 # 93 tests
 ```
+
+**Today's Exceptions** is the day-to-day view for operations staff: counts by severity, then one line per unresolved exception in priority order, with its single most useful reason:
+
+```
+20 requests need attention   🔴 11 Critical   🟠 7 High   🟡 2 Medium
+
+🔴 MR-1004 · Maple Court Apartments · Unit 3D — Gas smell reported near stove — 10 hrs open — No vendor assigned  (+2 more)
+🔴 MR-1023 · Pine Ridge Townhomes · Unit 31 — Carbon monoxide alarm going off — 22 hrs open — Possible safety issue labeled Low — review priority now
+🟠 MR-1016 · Harbor View Residences · Lobby — Elevator out of service — 27 hrs open — Work stalled — last progress 23 hrs ago
+```
+
+It is a presentation layer only: the same V1 rules, severities and ranking, with every rule trigger and recommended action one flag away (`--request` or `--details`).
 
 Python 3.11+, standard library only.
 
@@ -78,11 +92,12 @@ Python 3.11+, standard library only.
 
 | File | Purpose |
 |---|---|
-| `exception_monitor.py` | Escalation rules, ranking and report |
+| `exception_monitor.py` | Escalation rules, ranking and full report |
+| `todays_exceptions.py` | Today's Exceptions view (presentation only) |
 | `issue_categories.py` / `.toml` | Hazard screen, issue categories, procedures and standard actions |
 | `monitor_config.toml` | All time and cost thresholds |
 | `maintenance_requests.csv` | 25 synthetic sample requests |
 | `challenge_cases.csv`, `CHALLENGE_TESTS.md` | 8 adversarial cases, with predictions written before running and the results |
-| `test_exception_monitor.py` | 85 automated tests |
+| `test_exception_monitor.py` | 93 automated tests |
 | `docs/technical_reference.md` | Full rule and configuration reference |
 | `docs/demo.html` | One-page visual summary for demos (static, no dependencies beyond web fonts) |
