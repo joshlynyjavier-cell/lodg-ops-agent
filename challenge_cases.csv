@@ -1,0 +1,9 @@
+request_id,property,unit,issue,priority,created_at,status,vendor_assigned,estimated_cost,last_resident_update,scheduled_date,cost_approved,reported_by,vendor_confirmed,hold_reason,hold_until,last_progress_at
+CH-01,Maple Court Apartments,5A,Water pouring through ceiling light fixture,Emergency,2026-09-30 07:30,Open,,,,,,Resident,,,,
+CH-02,Riverside Lofts,214,Sewage backing up into bathtub,Emergency,2026-09-30 03:00,In Progress,RotoFast Drain,650,2026-09-30 08:20,,,Resident,Yes,,,2026-09-30 08:15
+CH-03,Oakwood Terrace,4,Kitchen cabinet door hinge loose,Emergency,2026-09-30 07:00,Open,HandyPro Maintenance,90,2026-09-30 07:05,,,Resident,Yes,,,
+CH-04,Pine Ridge Townhomes,11,Resident smells something like rotten eggs near water heater,Low,2026-09-30 08:00,Open,,,2026-09-30 08:10,,,Resident,,,,
+CH-05,Harbor View Residences,409,Bees nest above unit entrance,Medium,2026-09-29 15:00,Open,,,2026-09-29 15:30,,,Resident,,,,
+CH-06,Maple Court Apartments,Common Area,Replace failed boiler,High,2026-09-20 08:00,Completed,Metro Mechanical,14500,2026-09-24 16:00,,No,Staff,Yes,,,2026-09-24 15:00
+CH-07,,,Ceiling fan wobbling,urgent,09/29/2026 14:00,Open,TBD,,,,,Resident,,,,
+CH-08,Riverside Lofts,118,Dishwasher door latch broken,Medium,2026-09-20 10:00,On Hold,ApplianceCare Pros,180,2026-09-26 10:00,,,Resident,Yes,Waiting on replacement part from manufacturer,2026-10-06,2026-09-22 14:00
