@@ -1,117 +1,87 @@
-# Maintenance exception monitor (prototype, V1)
+# Maintenance Exception Monitor (V1 prototype)
 
-**Status: V1 is frozen.** Further changes only for safety-critical failures.
+> **Synthetic data and prototype assumptions.** Every maintenance request in this repo is fictional. All thresholds, issue categories and safety procedures are assumptions I made for this prototype. They are **not Lodg policies**, and the escalation procedures must be replaced with company-approved procedures, contacts and jurisdiction-specific requirements before any real-world use.
 
-Flags maintenance requests that need a person's attention and ranks them by severity.
+## The operational problem
 
-**What the prototype does not do.** It makes no external calls and takes no operational action. It never contacts emergency services, vendors or residents, never assigns vendors or approves costs, and never changes a priority or any other field. It only reads the CSV and prints a report (plus an optional CSV of the flags) for a human operator. A test fails if the code imports networking, email or process-launching modules.
+A property operations team manages a large queue of open maintenance requests across many buildings. The costly failures hide inside that queue: an emergency nobody dispatched, a vendor who never arrived, a resident who hasn't heard anything in days, a $5,000 repair nobody approved, or a gas smell logged as Low priority. Finding them by hand means rereading every ticket, every day.
 
-> **The escalation procedures in [`issue_categories.toml`](issue_categories.toml) are prototype examples only.**
-> They must be replaced with company-approved procedures, contacts and jurisdiction-specific requirements before any real-world use.
+## What the prototype does
 
-```
-python3 exception_monitor.py maintenance_requests.csv --as-of "2026-09-30 09:00"
-python3 exception_monitor.py --output exceptions.csv            # also write one row per flag
-python3 exception_monitor.py --config my_thresholds.toml         # use different thresholds
-python3 exception_monitor.py --categories my_categories.toml     # use different categories
-python3 -m unittest test_exception_monitor
-```
+It reads a CSV of maintenance requests, checks each one against a set of escalation rules, and produces a **ranked review queue**. For each flagged request, the queue shows the reason and a recommended next action.
 
-`--as-of` defaults to the current time. The sample data is built around 2026-09-30 09:00.
+It **surfaces and prioritizes; it never acts.** It doesn't contact vendors, residents or emergency services, change priorities or approve costs.
 
-## Output
-
-For every flagged request, the report shows the request ID, property, issue, current priority and issue category, then the category's escalation procedure or standard action, then each reason it was flagged with a recommended next action. Requests are ranked most urgent first.
+On the 25 sample requests, which are deliberately messy, it flags 20. The four emergencies nobody has responded to come first, followed by a carbon monoxide alarm mislabeled as Low.
 
 ```
-[CRITICAL] MR-1023
-  Property: Pine Ridge Townhomes, 31
-  Issue:    Carbon monoxide alarm going off
-  Priority: Low
-  Category: Gas / suspected gas leak or carbon monoxide (safety-critical)
-  Escalation procedure (PROTOTYPE EXAMPLE - not approved for real-world use):
-    - Confirm the resident has left the unit and was told not to use flames, light switches or electrical devices.
-    - Confirm 911 and the gas utility's emergency line have been called. If not, the operator calls them.
-    ...
-  1. Reason (critical): Issue looks like Gas / suspected gas leak or carbon monoxide (safety-critical, expected at least Emergency) but priority is Low.
-     Next action: Have a supervisor review the priority now. The monitor has not changed it.
+python3 exception_monitor.py --as-of "2026-09-30 09:00"   # sample data is built around this time
+python3 -m unittest test_exception_monitor                # 85 tests
 ```
 
-`--output exceptions.csv` writes the same information as one row per reason, for use in a spreadsheet.
+Python 3.11+, standard library only.
 
-## Configuration
+## How the workflow works
 
-Two files, both separate from the code:
+1. **Load settings:** thresholds come from `monitor_config.toml`, and categories and procedures from `issue_categories.toml`. Both can be edited without touching code.
+2. **Categorize each issue** using fixed keywords, in this order: confirmed safety category → hazard screen → human-review category → routine category. Anything unclear goes to a person.
+3. **Apply the escalation rules** to every unresolved request.
+4. **Rank** by severity (critical → low), then priority, then age.
+5. **Report:** each request gets its reasons and next actions, with a safety procedure or standard action where one applies. Unapproved high-cost work that's already completed goes in a separate financial-review section.
 
-- [`monitor_config.toml`](monitor_config.toml): every time and cost threshold.
-- [`issue_categories.toml`](issue_categories.toml): issue categories, their keywords, expected priority ranges, vendor types, escalation procedures and standard actions.
+## Escalation rules (prototype defaults)
 
-Operations can edit either file and rerun the monitor without touching the code. Both are validated on load: a missing, misspelled or invalid setting stops the monitor with an error naming it, rather than silently falling back to a default.
+| Check | Flags a request when |
+|---|---|
+| Dispatch | An Emergency has no confirmed vendor after 15 minutes (4 hours for High) |
+| Emergency progress | No response within 1 hour, work stalled for 4 hours, or active work but still unresolved after 24 hours (review only) |
+| Time limits | Unresolved past 24 hours (High), 48 hours (Medium) or 7 days (Low). A valid hold (reason and end date) or a future appointment pauses the clock |
+| Resident updates | No update within 2 hours (Emergency), 24 hours (High), 48 hours (Medium) or 7 days (Low) |
+| Cost | Estimate over $1,000 and not approved |
+| Missing data | Blank, placeholder ("TBD") or invalid priority, issue, date, property or unit |
+| Priority mismatch | A safety issue is labeled below its minimum priority, or a routine issue above its usual maximum |
+| Financial review | Completed work over $1,000 without recorded approval (reported separately) |
 
-## Issue categories
+## Human-review guardrails
 
-Categories are matched with fixed keywords (whole words, ignoring capitals, with a plural "s"/"es" also matching); no AI model is involved. Every recommended step comes from the category file, so it can be reviewed in advance.
+- **Read-only.** It changes no data and makes no network calls; a test enforces the no-network rule. The report states that nothing has been acted on.
+- **Priorities are never changed.** Mismatches are flagged for a supervisor. An assigned Emergency is always handled as an Emergency.
+- **Safety procedures are predefined, never generated.** The six safety-critical categories are gas or carbon monoxide, fire, flooding, electrical, elevator and structural damage. Each shows a fixed procedure that can be reviewed in advance.
+- **Hazard words override routine matches.** If an issue mentions a danger signal (smell, smoke, sparking, pouring water, sagging and similar) but no safety category is confirmed, it goes to human review rather than being treated as routine.
+- **No guessing.** Mold, pests, unfamiliar or ambiguous issues go to human review. There is no AI model in the decision path.
+- **Actions match reality.** It never tells an operator to contact a vendor that isn't assigned.
 
-| Handling | Categories | What the report shows |
-|---|---|---|
-| Safety-critical | gas / carbon monoxide, fire / smoke, flooding / major water leak, electrical hazard, elevator, structural damage / fall hazard | A predefined escalation procedure (prototype example). Actions on the request's flags start with "Follow the escalation procedure above." |
-| Human review | mold / moisture | A `NEEDS_HUMAN_REVIEW` flag with review guidance, because severity depends on context the data doesn't have |
-| Routine | HVAC, plumbing, appliance, refrigerator, access / lock, general maintenance | A standard action, and vendor-specific wording in dispatch actions. Food-loss guidance appears only for refrigerator issues |
+## Assumptions
 
-How a category is chosen:
+- **The CSV is a current snapshot.** Timestamps are local time, written `YYYY-MM-DD HH:MM`.
+- **The source system records these fields:** vendor confirmation, last progress, cost approval, reporter, scheduled date, and hold reason and end date. A real system may need mapping.
+- **Status:** "Completed" means resolved; every other status is unresolved.
+- **Staff-reported requests** don't require resident updates.
+- **Thresholds, categories and procedures** are prototype placeholders, not Lodg policy.
 
-1. Any safety-critical match wins. Two or more show all procedures plus a high-severity review flag.
-2. **Hazard screening.** Otherwise, if the issue contains a danger signal (smell, odor, smoke, burning, sparking, pouring water, water through the ceiling, sagging, collapse and similar, listed under `[hazard_screening]`), it goes to human review. A routine keyword can never override a possible hazard. The review flag is critical when the assigned priority is below High, since it may be an under-prioritized danger, and high otherwise. An assigned Emergency is never lowered or challenged by a keyword match.
-3. Otherwise a human-review match (mold / moisture).
-4. Otherwise exactly one routine match.
-5. If nothing matches, or several routine categories match, the request gets a `NEEDS_HUMAN_REVIEW` flag instead of a guess. Pest issues such as cockroaches deliberately have no category in V1 and go to human review.
+## Current limitations
 
-## Rules
+- **Keyword classification.** Only listed phrases (and simple plurals) are recognized, so unfamiliar wording can be missed. The hazard screen reduces this risk and deliberately leans toward false alarms.
+- **Snapshot only.** Each run starts fresh, with no memory, so repeat alerts aren't suppressed. There is no duplicate or repeat-problem detection.
+- **CSV input only,** with no system integration and a strict date format.
+- **Tested only on synthetic data:** 25 sample requests plus 8 adversarial cases. One adversarial case caught a real failure: a probable gas leak labeled Low was confidently misclassified as plumbing. It was fixed and is now a regression test ([`CHALLENGE_TESTS.md`](CHALLENGE_TESTS.md)).
 
-Statuses listed as resolved in the config (default: `Completed`) are never flagged. Every other status is unresolved.
-Values in the table are the current defaults.
+## What I would build next
 
-| Rule | Fires when | Severity |
-|---|---|---|
-| `NO_CONFIRMED_DISPATCH` | Emergency (after 15 min) or High (after 4 h) has no vendor, or the vendor hasn't confirmed | critical / high |
-| `NO_RESPONSE` | Emergency with no progress recorded 1 h after the request | critical |
-| `STALLED_PROGRESS` | Emergency with progress recorded, but none in the last 4 h | high |
-| `LONG_RUNNING_EMERGENCY` | Emergency with active work, still unresolved after 24 h. For review, not escalation | medium |
-| `OVER_TIME_LIMIT` | High, Medium or Low request unresolved longer than 24 h / 48 h / 7 d | by priority, +1 level at 4× the limit |
-| `RESIDENT_UPDATE_OVERDUE` | No resident update within Emergency 2 h, High 24 h, Medium 48 h, Low 7 d. Never updated counts from creation. Skipped when `reported_by` is Staff | high → low |
-| `HIGH_COST_REVIEW` | Estimate > $1,000 and `cost_approved` isn't Yes. Never holds up emergency work | medium |
-| `PRIORITY_MISMATCH` | Priority is below a safety-critical category's minimum, or above a routine category's maximum | critical / medium |
-| `NEEDS_HUMAN_REVIEW` | Possible hazard with no confirmed safety category; issue uncategorized, ambiguous, mold / moisture, or matching two safety-critical categories | critical → medium |
-| `MISSING_INFO` | Blank, placeholder (TBD, N/A…) or invalid issue, priority, created_at, status or property (high, since other rules can't run); missing unit; invalid `last_progress_at`; no cost estimate after 24 h | high → low |
-| `INVALID_HOLD` / `HOLD_EXPIRED` | On Hold without `hold_reason` and `hold_until`, past its end date, or an Emergency on hold | medium / high |
+1. **Validate with the operations team:** real thresholds, safety procedures reviewed by safety and legal, and a trial on a week of anonymized real tickets.
+2. **Read-only integration** with the work-order system, plus a daily digest to the ops channel. People still take every action.
+3. **Alert state:** acknowledge and snooze flags, suppress repeats, and measure time-to-resolution for flagged items.
+4. **Duplicate and repeat-problem detection:** the same unit and issue reported again.
+5. **AI-assisted categorization, as suggestions a person confirms,** for issues the keywords miss, measured against the challenge suite. Safety procedures would stay predefined.
 
-### Financial review (separate from maintenance)
+## Files
 
-Completed requests are never in the maintenance queue. Completed work over $1,000 whose `cost_approved` is blank or anything other than Yes gets a `FINANCIAL_REVIEW` item in a separate section at the end of the report, for finance or the property manager. It is financial oversight, not an active maintenance issue, so it has no severity and doesn't affect the maintenance ranking.
-
-### Emergencies: response vs. resolution
-
-An untouched emergency and one with a confirmed vendor actively working are different problems, so emergencies are checked in stages rather than against one resolution limit.
-Dispatch comes first: is a vendor confirmed? Then response: has any progress been recorded? Then active work: is progress still recent? Only when all of those are healthy does a long-running emergency show up, as a medium-severity item for review.
-Progress comes from `last_progress_at`: the latest time real work happened (vendor on site, diagnosis, parts ordered, repair attempt).
-
-### Priority mismatches
-
-Mismatches are flagged for human review only. The assigned priority still drives every other rule, so an Emergency is never downgraded automatically: a lightbulb labeled Emergency is still checked as an Emergency, with the mismatch flagged beside it.
-For ordering the list only, a safety-critical issue labeled below its minimum ranks with emergencies.
-
-## V1 limitations
-
-- **Keyword-based classification.** Categories and the hazard screen only recognize the phrases listed in `issue_categories.toml` (plus simple plurals). Unfamiliar wording can still be missed or miscategorized; the hazard screen and `NEEDS_HUMAN_REVIEW` reduce that risk but don't remove it. The keyword lists are deliberately not exhaustive.
-- **The hazard screen leans cautious.** Common words like "smell" send issues such as "bathroom smells musty" to critical human review. That is intended: a false alarm costs a supervisor a minute, while a missed hazard can cost much more.
-- **Placeholder procedures.** Escalation procedures are prototype examples and must be replaced before real-world use.
-- **Snapshot only.** Each run evaluates the CSV as it stands; there is no memory between runs, so repeat alerts aren't suppressed.
-- **Dates must be `YYYY-MM-DD HH:MM`.** Other formats (such as US-style `09/29/2026`) are flagged as invalid rather than parsed.
-
-See [`CHALLENGE_TESTS.md`](CHALLENGE_TESTS.md) for the adversarial test cases and results.
-
-## Future improvements
-
-- **AI-assisted categorization.** A model could suggest a category for issues the keywords miss, for a person to confirm. It would never choose or write safety procedures: those stay predefined and company-approved.
-- **Progress-based limits for all priorities.** Use `last_progress_at` for High, Medium and Low requests too, not just emergencies.
-- **Duplicate and repeat-problem detection.** Deliberately not implemented yet.
+| File | Purpose |
+|---|---|
+| `exception_monitor.py` | Escalation rules, ranking and report |
+| `issue_categories.py` / `.toml` | Hazard screen, issue categories, procedures and standard actions |
+| `monitor_config.toml` | All time and cost thresholds |
+| `maintenance_requests.csv` | 25 synthetic sample requests |
+| `challenge_cases.csv`, `CHALLENGE_TESTS.md` | 8 adversarial cases, with predictions written before running and the results |
+| `test_exception_monitor.py` | 85 automated tests |
+| `docs/technical_reference.md` | Full rule and configuration reference |
